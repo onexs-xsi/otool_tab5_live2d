@@ -39,4 +39,4 @@ spec/
 ## 当前状态
 
 - 全部文件：**draft**（2026-08-21 建立）
-- 阻塞项：G-LGL（research/legal_review_sheet.md）与生产模型冻结（G-FMT 输入）
+- 阻塞项：生产模型冻结（G-FMT 输入）与字段级规格整理（依据 `research/reference_manifest.yml` 固定的来源）

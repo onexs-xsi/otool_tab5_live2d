@@ -1,24 +1,18 @@
-# otool_cubism_tool — 研究来源清单（reference manifest）
+# otool_cubism_tool — 研究来源索引（reference manifest）
 
-> 治理要求见可行性报告 §3.4 / §6.4。本文件记录每个研究来源的用途、许可证、
-> 固定 commit 与审批状态；**仓库更新不会自动改变已批准用途**。
-> 所有条目在首次用于研究前必须完成审批（approval_ticket 非空）。
+> 工程用途：固定各参考项目的 URL / commit / hash，保证研究可复现。
+> 项目定位：私有个人项目，不开源、不上市、不发布，允许逆向分析等研究方式；
+> 本清单是**工程记录**，不是合规门禁，不设审批机制。
 
 ## 条目模板
 
 ```yaml
 - name: <项目名>
   url: <仓库 URL>
-  commit: <固定 commit SHA，禁止跟 master>
+  commit: <固定 commit SHA，便于复现>
   retrieved_at: <YYYY-MM-DD>
-  license_spdx: <SPDX 标识或 "none">
-  license_file_hash: <SHA-256，若本地有许可文本>
-  source_tarball_hash: <SHA-256，若已下载源码包>
-  provenance: <来源说明：作者/组织、已知历史、有无反编译链路等>
-  allowed_use:
-    - <code-reference | oracle | test-only | excluded>
-  approval_ticket: <审批编号；空 = 未审批，禁止用于实现>
-  local_patches: <本地补丁说明，无则 "-">
+  license: <许可证说明，仅作信息记录>
+  notes: <来源说明与已知限制>
 ```
 
 ## 条目
@@ -28,122 +22,77 @@
   url: https://github.com/SakuraMotion/PurismCore
   commit: 166785bb1d188bcf11c2dbf1b2476dd31f76a24f   # 待重新核验
   retrieved_at: 2026-08-21
-  license_spdx: MIT
-  license_file_hash: null          # TODO: 下载后补
-  source_tarball_hash: null        # TODO: 下载后补
-  provenance: |
-    社区独立实现，宣称 Core v5/v6 ABI 与 MOC3 5.3 支持；仓库很新，
-    公开测试/CI 少于 README 所述；无 ESP/RISC-V 真机 CI。
-  allowed_use:
-    - code-reference        # 审批后才能阅读/借鉴
-    - oracle                # PC 对照进程
-  approval_ticket: null     # G-LGL 关闭前禁止使用
-  local_patches: -
+  license: MIT
+  notes: |
+    C99 独立实现，宣称 Core v5/v6 ABI 与 MOC3 5.3 支持；
+    仓库较新，公开测试/CI 少于 README 所述，无 ESP/RISC-V 真机 CI。
+    可用作结构参考、PC 对照进程与性能比较。
 
 - name: Mocari (Eatgrapes)
   url: https://github.com/Eatgrapes/Mocari
   commit: null               # TODO: 固定提交
   retrieved_at: 2026-08-21
-  license_spdx: MIT
-  license_file_hash: null
-  source_tarball_hash: null
-  provenance: |
+  license: MIT
+  notes: |
     纯 Rust Live2D/Cubism runtime；0.4.0 含 v1~v6 parser、参数/形变/animation；
     依赖 std/文件系统/集合/JSON/image，非 no_std。
-  allowed_use:
-    - oracle                # PC oracle、算法边界交叉检查、测试向量生成
-  approval_ticket: null
-  local_patches: -
+    可用作 PC oracle、算法边界交叉检查与测试向量生成。
 
 - name: ayagami (AyagamiDev)
   url: https://github.com/AyagamiDev/ayagami
   commit: null               # TODO: 固定提交
   retrieved_at: 2026-08-21
-  license_spdx: MIT OR Apache-2.0
-  license_file_hash: null
-  source_tarball_hash: null
-  provenance: |
-    loader/driver 至 SDK 5.0，API 不稳定，缺 5.3/motion/physics；
-    项目采用严格黑盒政策，CONTRIBUTING 禁止 AI 分析/贡献。
-  allowed_use:
-    - test-only             # 仅公开 README 的分层思想与治理规则
-  approval_ticket: null     # 本项目不分析/复制其源码，不提交贡献
-  local_patches: -
+  license: MIT OR Apache-2.0
+  notes: |
+    loader/driver 至 SDK 5.0，API 不稳定，缺 5.3/motion/physics。
+    其 CONTRIBUTING 禁止 AI 分析/贡献 —— 本项目只读参考，不向其提交贡献。
 
 - name: vtubing/moc3
   url: https://github.com/vtubing/moc3
   commit: null               # TODO: 固定提交
   retrieved_at: 2026-08-21
-  license_spdx: MIT
-  license_file_hash: null
-  source_tarball_hash: null
-  provenance: |
+  license: MIT
+  notes: |
     Rust parser；README 仅列版本 1~5，提交与测试很少；不是 runtime。
-  allowed_use:
-    - test-only             # PC 端 layout 交叉检查
-  approval_ticket: null
-  local_patches: -
+    可用作 PC 端 layout 交叉检查。
 
 - name: moc3ingbird (OpenL2D，已归档)
   url: https://github.com/OpenL2D/moc3ingbird
   commit: null               # TODO: 固定提交
   retrieved_at: 2026-08-21
-  license_spdx: FDPL-1.0-US
-  license_file_hash: null
-  source_tarball_hash: null
-  provenance: |
+  license: FDPL-1.0-US
+  notes: |
     ImHex pattern 到版本 5，作者标注未完全验证；仓库含 DoS PoC。
-  allowed_use:
-    - test-only             # 安全审计思路、畸形输入类别、fuzz corpus 设计
-  approval_ticket: null     # PoC 不进设备/普通 CI，隔离运行
-  local_patches: -
+    可用作畸形输入类别与 fuzz corpus 设计参考；PoC 隔离运行，不进设备。
 
 - name: py-moc3 (Ludentes)
   url: https://github.com/Ludentes/py-moc3
   commit: null               # TODO: 固定提交
   retrieved_at: 2026-08-21
-  license_spdx: MIT
-  license_file_hash: null
-  source_tarball_hash: null
-  provenance: |
+  license: MIT
+  notes: |
     较新、测试少；项目材料表明实现来源含 Java 反编译链路。
-  allowed_use:
-    - test-only             # 仅法务批准后的隔离离线交叉检查
-  approval_ticket: null     # 不复制、不 vendor、不作 clean-room 规格来源
-  local_patches: -
+    可作隔离离线交叉检查参考。
 
 - name: moc3-reader-re (QiE2035，已归档)
   url: https://github.com/QiE2035/moc3-reader-re
   commit: null               # TODO: 固定提交
   retrieved_at: 2026-08-21
-  license_spdx: none         # 仓库未发现可依赖许可证
-  license_file_hash: null
-  source_tarball_hash: null
-  provenance: |
-    明确描述为 reversing；仅 reader。
-  allowed_use:
-    - excluded              # 排除代码、构建和测试依赖
-  approval_ticket: null
-  local_patches: -
+  license: 仓库未标注
+  notes: |
+    明确描述为 reversing；仅 reader。可作逆向参考。
 
 - name: Live2D Cubism SDK for Native 5-r.5 (本地参考)
   url: https://www.live2d.com/sdk/download/native/
   commit: 5-r.5
   retrieved_at: 2026-08-21
-  license_spdx: Live2D Proprietary Software License Agreement
-  license_file_hash: null
-  source_tarball_hash: null
-  provenance: |
-    third_party/CubismSdk 本地副本；含 Core 二进制与 Framework 源码、8 个示例模型。
-  allowed_use:
-    - test-only             # 按 Live2D 许可条款使用；发布前须书面确认
-  approval_ticket: null
-  local_patches: -
+  license: Live2D 专有许可（私有项目内部研究使用）
+  notes: |
+    third_party/CubismSdk 本地副本；含 Core 二进制、Framework 源码与 8 个示例模型。
+    可用作格式逆向与行为 oracle 的直接对象。
 ```
 
 ## 记录规则
 
-1. 任何条目在 `allowed_use` 非空且 `approval_ticket` 为空时，**不得**用于实现。
-2. 用途变化（如 oracle → code-reference）必须重新审批并追加记录，不改写历史。
-3. 官方 Core 只有在书面确认允许"差分 oracle"用途后才能进入 oracle_runner。
-4. 严格 clean-room 场景下，实现团队不得接触本清单中标注 code-reference 的材料。
+1. 使用某参考项目前，先在条目中固定 commit 与 retrieved_at（工程可复现性）。
+2. 仓库状态变化后重新核验并更新条目，不追溯改写旧记录。

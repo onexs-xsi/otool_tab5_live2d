@@ -17,5 +17,4 @@ vectors:
     artifact_ref: <受控 store 引用，无则 null>
     sha256: <hex>
     source: <local-sdk-samples | self-built-fixture | production-model>
-    approved: <ticket 或 false>
 ```

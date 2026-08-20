@@ -26,7 +26,7 @@ ESP-IDF 组件。`main` 只负责创建板级对象、注入端口并选择运�
 | `CONFIG_OTOOL_CUBISM_CORE_BACKEND_*` | NONE | NONE / **SELF**；REALTIME 必须 SELF |
 | `CONFIG_OTOOL_CUBISM_MOC_PROFILE_V5` | y | 首版唯一可发布 moc3 profile（版本字节 5） |
 | `CONFIG_OTOOL_CUBISM_ANIMATION_BACKEND_SELF` | y | 动画后端：组件自研（默认） |
-| `CONFIG_OTOOL_CUBISM_ANIMATION_BACKEND_APPROVED_FRAMEWORK` | n | 获准 Framework 复用（需审批 + csm shim） |
+| `CONFIG_OTOOL_CUBISM_ANIMATION_BACKEND_APPROVED_FRAMEWORK` | n | Framework 复用（需固定 manifest + csm shim） |
 | `CONFIG_OTOOL_CUBISM_ENABLE_CSM_COMPAT` | n | 私有 `csm*` shim（仅 Framework adapter 用） |
 | `CONFIG_OTOOL_CUBISM_ENABLE_V6_OFFSCREEN` | n | 5.3 离屏/扩展 blend（独立 Gate） |
 | `CONFIG_OTOOL_CUBISM_RENDER_SIZE_*` | 640×360 | 实时渲染分辨率档位 |
@@ -36,7 +36,7 @@ ESP-IDF 组件。`main` 只负责创建板级对象、注入端口并选择运�
 ## 目录说明
 
 ```
-research/   来源清单（reference_manifest.yml）与 G-LGL 审查单 —— 不进入固件
+research/   研究来源索引（reference_manifest.yml：固定 commit/hash，工程可复现）
 spec/       内部规格骨架（format/behavior/错误码/hard limits/测试向量 schema）
 tools/      PC 端工具（corpus_tool 已可用；oracle_runner/diff_runner 等后续）
 test/       host/fuzz/target 测试与向量清单（当前骨架）
@@ -67,10 +67,10 @@ s_tool.stop();
 s_tool.deinit();
 ```
 
-## 许可与治理
+## 项目定位与代码来源
 
-- 自研 Core 属 **reference-assisted**（非严格 clean-room），每个研究来源必须
-  在 `research/reference_manifest.yml` 登记并经审批；G-LGL 关闭前不写格式/行为代码。
-- 本组件骨架不含任何 Live2D 代码。对外命名为 "otool 独立 moc3-compatible
-  runtime"，不声称官方 Cubism Core / Live2D 背书。
-- 完整 Gate 体系见 `docs/live2d_feasibility.md` §6.6。
+- 私有个人项目：不开源、不上市、不发布；允许逆向分析等研究方式。
+- 研究来源按 `research/reference_manifest.yml` 固定 commit/hash（工程可复现，
+  不是合规门禁）；对外仍命名为 "otool 独立 moc3-compatible runtime"。
+- 完整工程 Gate 体系（G-FMT/G-BHV/G-SEC/G-TGT/G-RND/G-REL）见
+  `docs/live2d_feasibility.md` §6.6。

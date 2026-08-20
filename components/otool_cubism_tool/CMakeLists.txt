@@ -5,7 +5,7 @@
 #
 # 门禁规则：
 #   - REALTIME 尚未实现：开启即 FATAL_ERROR，直到 generated/core_feature_manifest.h
-#     由 spec/vector/corpus hash 生成并通过 G-LGL/G-FMT/G-BHV/G-SEC/G-TGT/G-RND/G-REL。
+#     由 spec/vector/corpus hash 生成并通过 G-FMT/G-BHV/G-SEC/G-TGT/G-RND/G-REL。
 #   - REALTIME 必须配 SELF backend；NONE 仅允许 clip/stream。
 #   - clip-only 构建不得出现 Core/Framework 符号。
 #   - 组件私有 C++ 统一 -fno-exceptions -fno-rtti。
