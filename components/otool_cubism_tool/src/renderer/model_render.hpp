@@ -2,18 +2,18 @@
  * @file model_render.hpp
  * @brief otool_cubism_tool — renderer：模型渲染器（自研）
  *
- * 最小渲染路径（可行性报告 §4.7 REALTIME 内部路径的雏形）：
- *   IR（顶点/UV/索引）→ 画布→屏幕变换 → 软光栅 → RGB565 场景缓冲
+ * 渲染路径（可行性报告 §4.7 REALTIME 内部路径的雏形）：
+ *   core runtime（update 后最终画布顶点/opacity）→ 画布→屏幕变换
+ *     → 软光栅 → RGB565 场景缓冲
  *
- * 本轮范围：
- *   - 每个 art_mesh 使用 keyform[0]（组合 0 = 各绑定参数最小值）的静态姿势
- *   - 全部 drawable 直接渲染（mask 裁剪语义后续轮次实现）
- *   - Normal 混合（alpha 混合），无 multiply/screen
+ * 本轮范围：全部 drawable 直接渲染（mask 裁剪语义后续轮次）；
+ * Normal 混合（alpha 混合），无 multiply/screen。
  */
 
 #pragma once
 
 #include "moc3_ir.hpp"
+#include "moc3_update.hpp"
 #include "soft_raster.hpp"
 
 #include <cstdint>
@@ -23,6 +23,8 @@ namespace otool::cubism::renderer {
 /** 渲染输入 */
 struct model_render_input {
     const core::moc3_ir *ir;          /* C1 IR */
+    const core::core_runtime *rt;     /* core_update_frame 后的顶点/opacity */
+
     const texture_ref *textures;      /* texture_no → 纹理 */
     uint32_t texture_count;
 
@@ -30,7 +32,6 @@ struct model_render_input {
     float scale;
     float offset_x;
     float offset_y;
-    bool flip_uv_y;                   /* 画布 flag 无 Y_REVERSED 时反转 */
 };
 
 /** 计算 fit 变换（保持宽高比，居中） */

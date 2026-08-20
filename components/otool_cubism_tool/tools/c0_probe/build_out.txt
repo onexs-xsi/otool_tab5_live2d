@@ -1,0 +1,37 @@
+c0_probe.cpp
+c0_probe.cpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+..\..\src\core\self\moc3_common.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+..\..\src\core\self\moc3_validate.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+D:\work\otool_tab5_live2d\components\otool_cubism_tool\src\core\self\moc3_reader.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+..\..\src\core\self\moc3_ir.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+..\..\src\core\self\moc3_update.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+..\..\src\renderer\soft_raster.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+..\..\src\renderer\model_render.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+moc3_validate.cpp
+..\..\src\core\self\moc3_validate.cpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+D:\work\otool_tab5_live2d\components\otool_cubism_tool\src\core\self\moc3_common.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+D:\work\otool_tab5_live2d\components\otool_cubism_tool\src\core\self\moc3_reader.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+moc3_ir.cpp
+..\..\src\core\self\moc3_ir.cpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+D:\work\otool_tab5_live2d\components\otool_cubism_tool\src\core\self\moc3_ir.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+D:\work\otool_tab5_live2d\components\otool_cubism_tool\src\core\self\moc3_common.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+D:\work\otool_tab5_live2d\components\otool_cubism_tool\src\core\self\moc3_reader.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+D:\work\otool_tab5_live2d\components\otool_cubism_tool\src\core\self\moc3_validate.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+..\..\src\core\self\moc3_ir.cpp(630): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+moc3_update.cpp
+D:\work\otool_tab5_live2d\components\otool_cubism_tool\src\core\self\moc3_update.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+D:\work\otool_tab5_live2d\components\otool_cubism_tool\src\core\self\moc3_ir.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+D:\work\otool_tab5_live2d\components\otool_cubism_tool\src\core\self\moc3_common.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+D:\work\otool_tab5_live2d\components\otool_cubism_tool\src\core\self\moc3_reader.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+soft_raster.cpp
+..\..\src\renderer\soft_raster.cpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+D:\work\otool_tab5_live2d\components\otool_cubism_tool\src\renderer\soft_raster.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+model_render.cpp
+..\..\src\renderer\model_render.cpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+D:\work\otool_tab5_live2d\components\otool_cubism_tool\src\renderer\model_render.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+..\..\src\core\self\moc3_ir.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+D:\work\otool_tab5_live2d\components\otool_cubism_tool\src\core\self\moc3_common.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+D:\work\otool_tab5_live2d\components\otool_cubism_tool\src\core\self\moc3_reader.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+..\..\src\core\self\moc3_update.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+D:\work\otool_tab5_live2d\components\otool_cubism_tool\src\renderer\soft_raster.hpp(1): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+正在生成代码...

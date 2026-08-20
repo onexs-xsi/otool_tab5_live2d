@@ -364,10 +364,10 @@ static bool verify_static(ir_builder &b)
                             SLOT_WARP_KF_OFF, (uint32_t)i)) {
             return b.fail(ERR_BAD_REFERENCE, SLOT_WARP_KF_OFF, 0, (uint32_t)i);
         }
-        /* keyform 位置池引用 */
+        /* keyform position pool refs (f32 indices; po + vc*2 <= pool) */
         for (int32_t j = 0; j < warp_kf_cnt[i]; ++j) {
             int32_t po = warp_key_pos_off[warp_kf_off[i] + j];
-            if (!b.range_ok(po, warp_vc[i], n_kf_pos)) {
+            if (!b.range_ok(po, warp_vc[i] * 2, n_kf_pos)) {
                 return b.fail(ERR_BAD_REFERENCE, SLOT_WARP_KEY_POS_OFF, 0,
                               (uint32_t)(warp_kf_off[i] + j));
             }
@@ -404,10 +404,10 @@ static bool verify_static(ir_builder &b)
                             SLOT_AM_KF_OFF, (uint32_t)i)) {
             return b.fail(ERR_BAD_REFERENCE, SLOT_AM_KF_OFF, 0, (uint32_t)i);
         }
-        /* art mesh keyform 位置池引用 */
+        /* art mesh keyform position pool refs (f32 indices; po + vc*2 <= pool) */
         for (int32_t j = 0; j < am_kf_cnt[i]; ++j) {
             int32_t po = am_key_pos_off[am_kf_off[i] + j];
-            if (!b.idx_ok(po, n_kf_pos)) {
+            if (!b.range_ok(po, am_vc[i] * 2, n_kf_pos)) {
                 return b.fail(ERR_BAD_REFERENCE, SLOT_AM_KEY_POS_OFF, 0,
                               (uint32_t)(am_kf_off[i] + j));
             }

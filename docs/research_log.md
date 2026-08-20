@@ -221,4 +221,32 @@ uv[0..3]、indices[0..5]、param[0]（max30/min-30/default0）、kf_pos[0..3] �
 3. LVGL image 集成（main）：640×360 帧缓冲 → 2x 上屏。
 4. 纹理与 moc3 素材进 SD/flash 的加载路径。
 
+---
+
+## 2026-08-21 — 第五轮：C2+C4 update 实现、软光栅、渲染管线打通
+
+### 交付（自研）
+
+| 文件 | 内容 |
+|---|---|
+| `src/core/self/moc3_update.hpp/.cpp` | C2（参数 clamp → 轴 key search → combo builder 2^N 组合）+ C4（warp 双线性/三角形插值、rotation 仿射、嵌套链深度排序、rotation 父链合成：origin 经父变换 + 角度数值探测 + scale/opacity 累积） |
+| `src/renderer/soft_raster.hpp/.cpp` | 最小软光栅：bounding-box + 重心、RGBA4444 nearest、预乘 alpha 混合 |
+| `src/renderer/model_render.hpp/.cpp` | IR+runtime → 画布→屏幕 fit 变换 → 逐 drawable 渲染（opacity、UV 翻转） |
+| c0_probe 扩展 | 完整管线 host 验证：create → update → render → PPM |
+
+### 关键 bug 修复（难点记录）
+
+15. **key_pos_offset 是 f32 索引**（与 uv_begin 同语义，非顶点对索引）——`&pos_pool[po*2]` 错误导致 am[96+] 越界读垃圾值 → 崩溃。修复为 `&pos_pool[po]`；C1 校验同步改为 `range_ok(po, vc*2, n_kf_pos)`（PurismCore 只查 `po < kf_pos`，宽松，不模仿）。
+16. **嵌套 deformer 必须深度序处理**（Mao 173/178 个 deformer 有父，链深达 14）。
+17. **rotation 父链合成**：origin 经父变换、angle 加父角度（数值探测：10 次迭代、step 依赖父类型 ±10°/±0.1）、scale × 父 scale 累积（PurismCore 与 Mocari 算法一致，交叉验证 ✓）。
+18. **坐标语义（待 oracle 确认）**：Mao 的 rotation scale=0.0001724 ≈ 1/5800（画布宽倒数），推测 rotation 把**画布坐标映射到父 warp 的归一化空间**；挂 rotation 的 art_mesh 局部顶点是画布坐标，挂 warp 的是归一化。**当前实现 render lit=0**（rotation 链顶点落点错误），需要官方 Core oracle 对照确认语义后修正。
+19. **工具链纪律**：PowerShell Get-Content/Set-Content 默认 GBK，会破坏 UTF-8 中文源文件（两次事故，一次不可逆）；**组件源码注释改为英文 + 只使用 edit/write 工具修改**。
+
+### 当前状态
+
+- 无崩溃、无 inf 顶点、217/262 drawable 可见（opacity>0）
+- 渲染输出 lit=0：rotation 父链的坐标语义问题（难点 18）
+- 下一步：官方 Core（Windows x64 静态库）作为 oracle 跑 Mao，导出顶点对照 → 修正坐标语义 → 正确渲染
+
+
 

@@ -16,6 +16,7 @@
 #include "moc3_common.hpp"
 #include "moc3_validate.hpp"
 #include "moc3_ir.hpp"
+#include "moc3_update.hpp"
 #include "soft_raster.hpp"
 #include "model_render.hpp"
 
@@ -175,6 +176,15 @@ int main(int argc, char **argv)
     std::printf("  kf_pos[0..3]: %g %g %g %g\n",
                 ir.f32(SLOT_KF_POS)[0], ir.f32(SLOT_KF_POS)[1],
                 ir.f32(SLOT_KF_POS)[2], ir.f32(SLOT_KF_POS)[3]);
+    /* rotation slot sanity (vs python probe) */
+    std::printf("  rot: kf_off[0..2]=%d,%d,%d base_ang=%g origin_x[0..3]=%g,%g,%g,%g\n",
+                ir.i32(SLOT_ROT_KF_OFF)[0], ir.i32(SLOT_ROT_KF_OFF)[1],
+                ir.i32(SLOT_ROT_KF_OFF)[2],
+                (double)ir.f32(SLOT_ROT_BASE_ANGLE)[0],
+                (double)ir.f32(SLOT_ROT_KEY_ORIGIN_X)[0],
+                (double)ir.f32(SLOT_ROT_KEY_ORIGIN_X)[1],
+                (double)ir.f32(SLOT_ROT_KEY_ORIGIN_X)[2],
+                (double)ir.f32(SLOT_ROT_KEY_ORIGIN_X)[3]);
 
     /* 渲染验证：640×360 场景 → PPM */
     if (do_render) {
@@ -228,22 +238,95 @@ int main(int argc, char **argv)
         frame_buffer fb = {fb_data, FB_W, FB_H};
         texture_ref texref = {tex, (uint16_t)tw, (uint16_t)th};
 
+        /* 完整管线：runtime create → update（默认参数）→ render */
+        core_runtime *rt = nullptr;
+        err_code rc2 = core_runtime_create(&ir, &rt);
+        std::printf("update: runtime_create -> %s (size=%u)\n",
+                    err_name(rc2), (unsigned)core_runtime_size(&ir));
+        if (rc2 != ERR_OK) {
+            std::free(fb_data);
+            std::free(tex);
+            std::free(buf);
+            return 1;
+        }
+        err_info uerr = {};
+        err_code rc3 = core_update_frame(rt, nullptr, &uerr); /* 默认参数 */
+        std::printf("update: frame (default params) -> %s (0x%x)\n",
+                    err_name(rc3), (unsigned)rc3);
+        if (rc3 != ERR_OK) {
+            std::printf("  section=%u offset=0x%x index=%u\n",
+                        (unsigned)uerr.section_id, (unsigned)uerr.byte_offset,
+                        (unsigned)uerr.index);
+        } else {
+            const float *m0 = &rt->mesh_pos[rt->mesh_off[0] * 2];
+            std::printf("update: am[0] final v0=(%g,%g) opacity=%g\n",
+                        (double)m0[0], (double)m0[1],
+                        (double)rt->mesh_opacity[0]);
+            const int32_t n_ams = ir.info.counts.v[CI_ART_MESHES];
+            int32_t visible = 0, inf_verts = 0;
+            for (int32_t i = 0; i < n_ams; ++i) {
+                const int32_t vc = ir.i32(SLOT_AM_VERTEX_COUNT)[i];
+                if (rt->mesh_opacity[i] > 0.0f && vc > 0) ++visible;
+                for (int32_t v = 0; v < vc && v < 4; ++v) {
+                    const float *p = &rt->mesh_pos[(rt->mesh_off[i] + v) * 2];
+                    if (!(p[0] > -100000.0f && p[0] < 100000.0f) ||
+                        !(p[1] > -100000.0f && p[1] < 100000.0f)) {
+                        ++inf_verts;
+                    }
+                }
+            }
+            std::printf("update: visible am=%d/%d inf_verts=%d\n", visible, n_ams, inf_verts);
+            const float *m13 = &rt->mesh_pos[rt->mesh_off[13] * 2];
+            std::printf("update: am[13] v0=(%g,%g) v1=(%g,%g)\n",
+                        (double)m13[0], (double)m13[1],
+                        (double)m13[2], (double)m13[3]);
+            std::printf("update: rot[0] origin=(%g,%g) angle=%g scale=%g\n",
+                        (double)rt->rot_origin_x[0], (double)rt->rot_origin_y[0],
+                        (double)rt->rot_angle[0], (double)rt->rot_scale[0]);
+            {
+                const int32_t pdi = ir.i32(SLOT_AM_PARENT_DEF)[13];
+                const int32_t pt = ir.i32(SLOT_DEF_TYPE)[pdi];
+                const int32_t pl = ir.i32(SLOT_DEF_LOCAL)[pdi];
+                std::printf("update: am[13] parent_def=%d type=%d local=%d\n",
+                            (int)pdi, (int)pt, (int)pl);
+                if (pt == 1 && pl >= 0 && pl < 60) {
+                    std::printf("update: rot[%d] (composed) origin=(%g,%g) angle=%g scale=%g opa=%g\n",
+                                (int)pl,
+                                (double)rt->rot_origin_x[pl], (double)rt->rot_origin_y[pl],
+                                (double)rt->rot_angle[pl], (double)rt->rot_scale[pl],
+                                (double)rt->rot_opacity[pl]);
+                }
+            }
+        }
+        core_runtime_destroy(rt);
+
+        /* 渲染（update 成功后） */
         model_render_input rin = {};
         rin.ir = &ir;
         rin.textures = &texref;
         rin.texture_count = 1;
         prepare_view(&rin, FB_W, FB_H);
-        std::printf("render: view scale=%g offset=(%g,%g) flip_uv_y=%d\n",
-                    rin.scale, rin.offset_x, rin.offset_y, (int)rin.flip_uv_y);
-        render_frame(rin, fb, 0x0000); /* 黑底 */
+        std::printf("render: view scale=%g offset=(%g,%g)\n",
+                    rin.scale, rin.offset_x, rin.offset_y);
+        if (rc3 == ERR_OK) {
+            /* 重新 create/update（render 需要 rt） */
+            rc2 = core_runtime_create(&ir, &rt);
+            if (rc2 == ERR_OK) {
+                rc3 = core_update_frame(rt, nullptr, &uerr);
+                if (rc3 == ERR_OK) {
+                    rin.rt = rt;
+                    render_frame(rin, fb, 0x0000); /* 黑底 */
 
-        /* 统计非背景像素 */
-        uint32_t lit = 0;
-        for (uint32_t i = 0; i < FB_W * FB_H; ++i) {
-            if (fb_data[i] != 0) ++lit;
+                    uint32_t lit = 0;
+                    for (uint32_t i = 0; i < FB_W * FB_H; ++i) {
+                        if (fb_data[i] != 0) ++lit;
+                    }
+                    std::printf("render: lit pixels=%u (%.1f%%)\n",
+                                lit, 100.0 * (double)lit / (FB_W * FB_H));
+                }
+                core_runtime_destroy(rt);
+            }
         }
-        std::printf("render: lit pixels=%u (%.1f%%)\n",
-                    lit, 100.0 * (double)lit / (FB_W * FB_H));
 
         /* PPM P6 输出 */
         FILE *pf = std::fopen(ppm_path, "wb");
