@@ -1,0 +1,10 @@
+[submodule "components/otool_dev_autodetect"]
+	path = components/otool_dev_autodetect
+	url = git@github.com:onexs-xsi/otool_dev_autodetect.git
+	branch = master
+[submodule "components/otool_lvgl_idf_port"]
+	path = components/otool_lvgl_idf_port
+	url = git@github.com:onexs-xsi/otool_lvgl_idf_port.git
+[submodule "components/otool_tab5_component"]
+	path = components/otool_tab5_component
+	url = git@github.com:onexs-xsi/otool_tab5_component.git
