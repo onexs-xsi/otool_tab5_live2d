@@ -38,3 +38,13 @@ CONFIG_LV_FONT_MONTSERRAT_36=y
 
 # 其他
 CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+
+# REALTIME self-core build (2026-08-21): required for the model demo.
+# Custom partition table with 15MB app: embedded model assets (~2.9MB).
+# PERF optimization: soft raster is too slow at -Og on-device.
+CONFIG_OTOOL_CUBISM_ENABLE_REALTIME=y
+CONFIG_OTOOL_CUBISM_CORE_BACKEND_SELF=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384

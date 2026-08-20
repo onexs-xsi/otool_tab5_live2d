@@ -6,8 +6,7 @@
  *   core runtime（update 后最终画布顶点/opacity）→ 画布→屏幕变换
  *     → 软光栅 → RGB565 场景缓冲
  *
- * 本轮范围：全部 drawable 直接渲染（mask 裁剪语义后续轮次）；
- * Normal 混合（alpha 混合），无 multiply/screen。
+ * 当前支持动态绘制顺序、A8 裁剪蒙版以及 Normal/Add/Multiply 混合。
  */
 
 #pragma once
@@ -27,6 +26,7 @@ struct model_render_input {
 
     const texture_ref *textures;      /* texture_no → 纹理 */
     uint32_t texture_count;
+    alpha_buffer mask;                /* 可复用 A8 蒙版，与输出帧同尺寸 */
 
     /* 画布→屏幕变换（fit + 居中），由 prepare_view 计算 */
     float scale;

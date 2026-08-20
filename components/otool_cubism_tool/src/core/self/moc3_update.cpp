@@ -193,15 +193,18 @@ uint32_t core_runtime_size(const moc3_ir *ir)
             total_warp += (uint32_t)(warp_row[i] + 1) * (uint32_t)(warp_col[i] + 1);
         }
     }
+    const size_t blend_count_bytes =
+        ((size_t)c.v[CI_BINDINGS] + alignof(float) - 1U) & ~(alignof(float) - 1U);
     return (uint32_t)(sizeof(core_runtime) +
                       (size_t)c.v[CI_PARAMETERS] * sizeof(float) +
                       (size_t)c.v[CI_AXES] * (sizeof(int32_t) + sizeof(float)) +
-                      (size_t)c.v[CI_BINDINGS] * (16 * sizeof(int32_t) + 16 * sizeof(float) + 1) +
+                      (size_t)c.v[CI_BINDINGS] * (16 * sizeof(int32_t) + 16 * sizeof(float)) +
+                      blend_count_bytes +
                       (size_t)total_warp * 2 * sizeof(float) +
                       (size_t)c.v[CI_ROTATIONS] * 5 * sizeof(float) +
                       (size_t)c.v[CI_WARPS] * sizeof(float) +
                       (size_t)total_am * 2 * sizeof(float) +
-                      (size_t)c.v[CI_ART_MESHES] * sizeof(float) +
+                      (size_t)c.v[CI_ART_MESHES] * 2 * sizeof(float) +
                       (size_t)(c.v[CI_ART_MESHES] + 1) * sizeof(uint32_t));
 }
 
@@ -228,6 +231,7 @@ err_code core_runtime_create(const moc3_ir *ir, core_runtime **out_rt)
     rt->bind_keyform_idx = (int32_t *)p; p += (size_t)c.v[CI_BINDINGS] * 16 * sizeof(int32_t);
     rt->bind_weights = (float *)p; p += (size_t)c.v[CI_BINDINGS] * 16 * sizeof(float);
     rt->bind_blend_count = (uint8_t *)p; p += (size_t)c.v[CI_BINDINGS];
+    p = (uint8_t *)(((uintptr_t)p + alignof(float) - 1U) & ~(uintptr_t)(alignof(float) - 1U));
 
     const int32_t *am_vc = ir->i32(SLOT_AM_VERTEX_COUNT);
     const int32_t *warp_row = ir->i32(SLOT_WARP_ROW);
@@ -253,6 +257,7 @@ err_code core_runtime_create(const moc3_ir *ir, core_runtime **out_rt)
     rt->warp_opacity = (float *)p; p += (size_t)c.v[CI_WARPS] * sizeof(float);
     rt->mesh_pos = (float *)p; p += (size_t)total_am * 2 * sizeof(float);
     rt->mesh_opacity = (float *)p; p += (size_t)c.v[CI_ART_MESHES] * sizeof(float);
+    rt->mesh_draw_order = (float *)p; p += (size_t)c.v[CI_ART_MESHES] * sizeof(float);
     rt->mesh_off = (uint32_t *)p; p += (size_t)(c.v[CI_ART_MESHES] + 1) * sizeof(uint32_t);
 
     uint32_t acc = 0;
@@ -593,12 +598,14 @@ err_code core_update_frame(core_runtime *rt, const float *params, err_info *err)
     const int32_t *am_parent_def = ir.i32(SLOT_AM_PARENT_DEF);
     const int32_t *am_kp_off = ir.i32(SLOT_AM_KEY_POS_OFF);
     const float *am_k_opacity = ir.f32(SLOT_AM_KEY_OPACITY);
+    const float *am_k_draw_order = ir.f32(SLOT_AM_KEY_DRAW_ORDER);
 
     uint32_t am_off = 0;
     for (int32_t i = 0; i < n_ams; ++i) {
         const int32_t vc = am_vc[i];
         if (vc <= 0) {
             rt->mesh_opacity[i] = 0.0f;
+            rt->mesh_draw_order[i] = 0.0f;
             continue;
         }
         const int32_t bi = am_binding[i];
@@ -611,6 +618,8 @@ err_code core_update_frame(core_runtime *rt, const float *params, err_info *err)
                                 kf_idx, w, bc, vc, dst);
         rt->mesh_opacity[i] = blend_keyform_scalar(am_k_opacity, am_kf_off[i],
                                                    kf_idx, w, bc);
+        rt->mesh_draw_order[i] = blend_keyform_scalar(am_k_draw_order, am_kf_off[i],
+                                                      kf_idx, w, bc);
 
         /* parent deformer transform (parent output is canvas space; one hop) */
         const int32_t pdi = am_parent_def[i];

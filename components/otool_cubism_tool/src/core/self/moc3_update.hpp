@@ -47,9 +47,10 @@ struct core_runtime {
     float *rot_opacity;          /* rotations 个 */
     float *warp_opacity;         /* warps 个 */
 
-    /* art_mesh 最终顶点（画布坐标）与不透明度 */
+    /* art_mesh 最终顶点（画布坐标）、不透明度与动态绘制顺序 */
     float *mesh_pos;             /* Σ am_vc × 2 */
     float *mesh_opacity;         /* art_meshes 个 */
+    float *mesh_draw_order;      /* art_meshes 个 */
     uint32_t *mesh_off;          /* art_meshes+1 前缀和（顶点池偏移） */
 
     uint32_t total_mesh_vertices; /* Σ am_vc */

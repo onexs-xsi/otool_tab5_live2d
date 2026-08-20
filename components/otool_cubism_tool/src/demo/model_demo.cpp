@@ -16,6 +16,10 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include <cstring>
 
@@ -35,8 +39,11 @@ struct model_handle_impl {
     core_runtime  *rt;
     uint16_t      *tex;           /* PSRAM 纹理副本（RGBA4444） */
     uint16_t       tex_w, tex_h;
+    uint8_t       *mask;          /* 当前 framebuffer 尺寸的 A8 复用蒙版 */
+    size_t         mask_capacity;
     float         *params;
     int32_t        n_params;
+    int64_t        next_cooperate_us;
 };
 
 inline model_handle_impl *h2i(model_handle *h)
@@ -47,6 +54,19 @@ inline model_handle_impl *h2i(model_handle *h)
 inline const model_handle_impl *h2i(const model_handle *h)
 {
     return reinterpret_cast<const model_handle_impl *>(h);
+}
+
+void raster_cooperate(void *ctx)
+{
+    model_handle_impl *h = static_cast<model_handle_impl *>(ctx);
+    const int64_t now = esp_timer_get_time();
+    if (now < h->next_cooperate_us) {
+        return;
+    }
+
+    /* taskYIELD() 不会让更低优先级的 IDLE task 运行；阻塞 1 tick 才能喂到 TWDT。 */
+    vTaskDelay(1);
+    h->next_cooperate_us = esp_timer_get_time() + 8000;
 }
 
 } // namespace
@@ -155,6 +175,9 @@ void model_destroy(model_handle *h)
     if (i->params != nullptr) {
         heap_caps_free(i->params);
     }
+    if (i->mask != nullptr) {
+        heap_caps_free(i->mask);
+    }
     if (i->moc3_owned != nullptr) {
         heap_caps_free(i->moc3_owned);
     }
@@ -187,6 +210,21 @@ bool model_render(model_handle *h, uint16_t *rgb565, uint16_t fb_w, uint16_t fb_
         return false;
     }
 
+    const size_t mask_bytes = (size_t)fb_w * fb_h;
+    if (i->mask_capacity < mask_bytes) {
+        uint8_t *next = (uint8_t *)heap_caps_malloc(mask_bytes,
+                                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (next == nullptr) {
+            ESP_LOGE(TAG, "no memory for mask buffer (%u bytes)", (unsigned)mask_bytes);
+            return false;
+        }
+        if (i->mask != nullptr) {
+            heap_caps_free(i->mask);
+        }
+        i->mask = next;
+        i->mask_capacity = mask_bytes;
+    }
+
     err_info uerr = {};
     if (core_update_frame(i->rt, i->params, &uerr) != ERR_OK) {
         ESP_LOGE(TAG, "core_update_frame -> 0x%x", (unsigned)uerr.code);
@@ -198,10 +236,14 @@ bool model_render(model_handle *h, uint16_t *rgb565, uint16_t fb_w, uint16_t fb_
     renderer::texture_ref texref = {i->tex, i->tex_w, i->tex_h};
     rin.textures = &texref;
     rin.texture_count = 1;
+    rin.mask = {i->mask, fb_w, fb_h};
     renderer::prepare_view(&rin, fb_w, fb_h);
     rin.rt = i->rt;
 
     renderer::frame_buffer fb = {rgb565, fb_w, fb_h};
+    fb.cooperate = raster_cooperate;
+    fb.cooperate_ctx = i;
+    fb.cooperate_interval = 16U * 1024U;
     renderer::render_frame(rin, fb, 0x0000);
     return true;
 }

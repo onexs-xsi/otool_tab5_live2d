@@ -10,7 +10,9 @@
  *   cl /nologo /std:c++17 /O2 /I <组件>/src/core/self c0_probe.cpp ^
  *      <组件>/src/core/self/moc3_validate.cpp /Fe:c0_probe.exe
  *
- * 用法： c0_probe.exe <file.moc3>
+ * 用法：
+ *   c0_probe.exe <file.moc3>
+ *   c0_probe.exe <file.moc3> --dump-runtime <out.tsv>
  */
 
 #include "moc3_common.hpp"
@@ -63,13 +65,15 @@ int main(int argc, char **argv)
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0); /* 无缓冲输出，便于崩溃定位 */
     if (argc < 2) {
-        std::printf("usage: c0_probe <file.moc3> [--render <tex.raw> <tex.meta> <out.ppm>]\n");
+        std::printf("usage: c0_probe <file.moc3> [--render <tex.raw> <tex.meta> <out.ppm> | --dump-runtime <out.tsv>]\n");
         return 2;
     }
     const bool do_render = argc >= 6 && std::strcmp(argv[2], "--render") == 0;
     const char *tex_path = do_render ? argv[3] : nullptr;
     const char *tex_meta = do_render ? argv[4] : nullptr;
     const char *ppm_path = do_render ? argv[5] : nullptr;
+    const bool do_dump = argc >= 4 && std::strcmp(argv[2], "--dump-runtime") == 0;
+    const char *dump_path = do_dump ? argv[3] : nullptr;
     const bool do_oracle = argc >= 6 && std::strcmp(argv[2], "--oracle") == 0;
     const char *oracle_path = do_oracle ? argv[3] : nullptr;
     const char *tex_path_o = do_oracle ? argv[4] : nullptr;
@@ -310,6 +314,49 @@ int main(int argc, char **argv)
                 (double)ir.f32(SLOT_ROT_KEY_ORIGIN_X)[2],
                 (double)ir.f32(SLOT_ROT_KEY_ORIGIN_X)[3]);
 
+    /* 默认帧逐 drawable dump：供官方 Core oracle 做数值回归。 */
+    if (do_dump) {
+        core_runtime *rt = nullptr;
+        err_info update_err = {};
+        const err_code create_rc = core_runtime_create(&ir, &rt);
+        const err_code update_rc = create_rc == ERR_OK
+                                       ? core_update_frame(rt, nullptr, &update_err)
+                                       : create_rc;
+        if (update_rc != ERR_OK) {
+            std::printf("dump: update failed -> %s (section=%u index=%u)\n",
+                        err_name(update_rc), (unsigned)update_err.section_id,
+                        (unsigned)update_err.index);
+            core_runtime_destroy(rt);
+            std::free(buf);
+            return 1;
+        }
+        FILE *df = std::fopen(dump_path, "wb");
+        if (df == nullptr) {
+            std::printf("dump: cannot write %s\n", dump_path);
+            core_runtime_destroy(rt);
+            std::free(buf);
+            return 2;
+        }
+        std::fprintf(df, "canvas\t%.9g\t%.9g\t%.9g\t%.9g\t%.9g\n",
+                     info.canvas_width, info.canvas_height, info.origin_x,
+                     info.origin_y, info.pix_per_unit);
+        for (int32_t i = 0; i < n_ams; ++i) {
+            const int32_t vc = am_vc[i];
+            std::fprintf(df, "D\t%d\t%d\t%.9g\t%.9g\n", i, vc,
+                         rt->mesh_opacity[i], rt->mesh_draw_order[i]);
+            for (int32_t v = 0; v < vc; ++v) {
+                const float *p = &rt->mesh_pos[(rt->mesh_off[i] + (uint32_t)v) * 2];
+                /* 官方 Core oracle 使用 y 向上；self runtime 内部使用屏幕 y 向下。 */
+                std::fprintf(df, "V\t%d\t%d\t%.9g\t%.9g\n", i, v, p[0], -p[1]);
+            }
+        }
+        std::fclose(df);
+        std::printf("dump: wrote %s\n", dump_path);
+        core_runtime_destroy(rt);
+        std::free(buf);
+        return 0;
+    }
+
     /* 渲染验证：640×360 场景 → PPM */
     if (do_render) {
         /* 读纹理 meta（JSON 中取 width/height） */
@@ -353,8 +400,11 @@ int main(int argc, char **argv)
 
         constexpr uint16_t FB_W = 640, FB_H = 360;
         uint16_t *fb_data = (uint16_t *)std::calloc(FB_W * FB_H, 2);
-        if (fb_data == nullptr) {
+        uint8_t *mask_data = (uint8_t *)std::calloc(FB_W * FB_H, 1);
+        if (fb_data == nullptr || mask_data == nullptr) {
             std::printf("render: no memory\n");
+            std::free(mask_data);
+            std::free(fb_data);
             std::free(tex);
             std::free(buf);
             return 2;
@@ -369,6 +419,7 @@ int main(int argc, char **argv)
                     err_name(rc2), (unsigned)core_runtime_size(&ir));
         if (rc2 != ERR_OK) {
             std::free(fb_data);
+            std::free(mask_data);
             std::free(tex);
             std::free(buf);
             return 1;
@@ -410,6 +461,7 @@ int main(int argc, char **argv)
         rin.ir = &ir;
         rin.textures = &texref;
         rin.texture_count = 1;
+        rin.mask = {mask_data, FB_W, FB_H};
         prepare_view(&rin, FB_W, FB_H);
         std::printf("render: view scale=%g offset=(%g,%g)\n",
                     rin.scale, rin.offset_x, rin.offset_y);
@@ -438,6 +490,7 @@ int main(int argc, char **argv)
         if (pf == nullptr) {
             std::printf("render: cannot write %s\n", ppm_path);
             std::free(fb_data);
+            std::free(mask_data);
             std::free(tex);
             std::free(buf);
             return 2;
@@ -447,6 +500,7 @@ int main(int argc, char **argv)
         if (rgb == nullptr) {
             std::fclose(pf);
             std::free(fb_data);
+            std::free(mask_data);
             std::free(tex);
             std::free(buf);
             return 2;
@@ -463,6 +517,7 @@ int main(int argc, char **argv)
         std::printf("render: wrote %s\n", ppm_path);
 
         std::free(fb_data);
+        std::free(mask_data);
         std::free(tex);
     }
 
