@@ -1,8 +1,8 @@
 # spec — 产品硬上限与内存预算（草案）
 
 > 状态：draft（待 G-FMT 与生产模型 profile 冻结）。
-> 所有值是可调草案；冻结后由 `generated/core_feature_manifest.h` 固化，
-> parser/validator 与 asset_validator 共用同一份值。
+> 所有值是可调草案；冻结后写入 spec 冻结版本，parser/validator 与
+> asset_validator 共用同一份值。
 
 ## 1. 模型规模硬上限（草案）
 

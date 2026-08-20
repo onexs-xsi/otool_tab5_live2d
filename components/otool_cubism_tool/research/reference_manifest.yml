@@ -1,14 +1,17 @@
 # otool_cubism_tool — 研究来源索引（reference manifest）
 
-> 工程用途：固定各参考项目的 URL / commit / hash，保证研究可复现。
+> 工程用途：记录研究材料来源（URL / commit / hash），保证研究可复现。
 >
-> **自研代码铁律（2026-08-21）**：构成组件的所有代码必须自研。
-> 第三方项目与 SDK **只允许研究参考**（阅读、逆向、运行对照、理解行为），
-> **禁止**复制其代码片段、代码文件、二进制文件或数据文件进入本组件。
-> 任何进入组件的实现都必须基于自身研究重新编写。
+> **材料规则（2026-08-21 修订）**：
+> - **允许**联网拉取任何需要的代码、允许逆向任何文件（包括官方 Core 二进制、
+>   样例模型、参考实现源码等）；
+> - 拉取/逆向的**材料必须放在临时文件夹**（系统 temp 或仓库外目录），
+>   不得进入 git 仓库与组件目录；
+> - 组件内实现代码仍全部自研：材料只用于阅读/逆向/运行对照/理解行为，
+>   构成组件的代码必须自行编写。
 >
 > 项目定位：私有个人项目，不开源、不上市、不发布；允许逆向分析等研究方式；
-> 本清单是**工程记录 + 来源用途声明**，不是合规门禁。
+> 本清单是**工程记录 + 材料索引**，不是合规门禁。
 
 ## 条目模板
 
@@ -18,7 +21,7 @@
   commit: <固定 commit SHA，便于复现>
   retrieved_at: <YYYY-MM-DD>
   license: <许可证说明，仅作信息记录>
-  allowed_use: reference-only   # 仅研究参考；禁止复制代码/二进制/数据
+  material_location: <临时文件夹路径/说明，材料不进仓库>
   notes: <来源说明与已知限制>
 ```
 
@@ -30,29 +33,29 @@
   commit: 166785bb1d188bcf11c2dbf1b2476dd31f76a24f   # 待重新核验
   retrieved_at: 2026-08-21
   license: MIT
-  allowed_use: reference-only
+  material_location: 临时文件夹（%TEMP%/otool_cubism_research/）
   notes: |
     C99 独立实现，宣称 Core v5/v6 ABI 与 MOC3 5.3 支持；
     仓库较新，公开测试/CI 少于 README 所述，无 ESP/RISC-V 真机 CI。
-    用作结构与行为研究、PC 对照进程、性能比较；不复制其代码。
+    用于结构与行为研究、PC 对照进程、性能比较。
 
 - name: Mocari (Eatgrapes)
   url: https://github.com/Eatgrapes/Mocari
   commit: null               # TODO: 固定提交
   retrieved_at: 2026-08-21
   license: MIT
-  allowed_use: reference-only
+  material_location: 临时文件夹（%TEMP%/otool_cubism_research/）
   notes: |
     纯 Rust Live2D/Cubism runtime；0.4.0 含 v1~v6 parser、参数/形变/animation；
     依赖 std/文件系统/集合/JSON/image，非 no_std。
-    用作 PC oracle、算法边界交叉检查与测试向量生成；不复制其代码。
+    用作 PC oracle、算法边界交叉检查与测试向量生成。
 
 - name: ayagami (AyagamiDev)
   url: https://github.com/AyagamiDev/ayagami
   commit: null               # TODO: 固定提交
   retrieved_at: 2026-08-21
   license: MIT OR Apache-2.0
-  allowed_use: reference-only
+  material_location: 临时文件夹（%TEMP%/otool_cubism_research/）
   notes: |
     loader/driver 至 SDK 5.0，API 不稳定，缺 5.3/motion/physics。
     其 CONTRIBUTING 禁止 AI 分析/贡献 —— 本项目只做高层思想参考，不提交贡献。
@@ -62,55 +65,54 @@
   commit: null               # TODO: 固定提交
   retrieved_at: 2026-08-21
   license: MIT
-  allowed_use: reference-only
+  material_location: 临时文件夹（%TEMP%/otool_cubism_research/）
   notes: |
     Rust parser；README 仅列版本 1~5，提交与测试很少；不是 runtime。
-    用作 PC 端 layout 交叉检查；不复制其代码。
+    用作 PC 端 layout 交叉检查。
 
 - name: moc3ingbird (OpenL2D，已归档)
   url: https://github.com/OpenL2D/moc3ingbird
   commit: null               # TODO: 固定提交
   retrieved_at: 2026-08-21
   license: FDPL-1.0-US
-  allowed_use: reference-only
+  material_location: 临时文件夹（%TEMP%/otool_cubism_research/）
   notes: |
     ImHex pattern 到版本 5，作者标注未完全验证；仓库含 DoS PoC。
-    用作畸形输入类别与 fuzz corpus 设计参考；PoC 隔离运行，不进设备；不复制其代码。
+    用作畸形输入类别与 fuzz corpus 设计参考；PoC 隔离运行，不进设备。
 
 - name: py-moc3 (Ludentes)
   url: https://github.com/Ludentes/py-moc3
   commit: null               # TODO: 固定提交
   retrieved_at: 2026-08-21
   license: MIT
-  allowed_use: reference-only
+  material_location: 临时文件夹（%TEMP%/otool_cubism_research/）
   notes: |
     较新、测试少；项目材料表明实现来源含 Java 反编译链路。
-    可作隔离离线交叉检查参考；不复制其代码。
+    可作隔离离线交叉检查参考。
 
 - name: moc3-reader-re (QiE2035，已归档)
   url: https://github.com/QiE2035/moc3-reader-re
   commit: null               # TODO: 固定提交
   retrieved_at: 2026-08-21
   license: 仓库未标注
-  allowed_use: reference-only
+  material_location: 临时文件夹（%TEMP%/otool_cubism_research/）
   notes: |
-    明确描述为 reversing；仅 reader。可作逆向思路参考；不复制其代码。
+    明确描述为 reversing；仅 reader。可作逆向思路参考。
 
 - name: Live2D Cubism SDK for Native 5-r.5 (本地参考)
   url: https://www.live2d.com/sdk/download/native/
   commit: 5-r.5
   retrieved_at: 2026-08-21
   license: Live2D 专有许可（私有项目内部研究使用）
-  allowed_use: reference-only
+  material_location: 仓库级 third_party/CubismSdk（git 忽略，等同临时材料目录）
   notes: |
-    third_party/CubismSdk 本地副本；含 Core 二进制、Framework 源码与 8 个示例模型。
-    用作格式逆向与行为 oracle 的研究对象；**不复制其源码/二进制/模型文件进组件**
-    （模型文件仅用于本地研究与测试向量生成，测试向量不入库）。
+    Core 二进制、Framework 源码与 8 个示例模型。
+    用作格式逆向与行为 oracle 的研究对象；材料不进组件与仓库。
 ```
 
 ## 记录规则
 
 1. 使用某参考项目前，先在条目中固定 commit 与 retrieved_at（工程可复现性）。
-2. **禁止复制**任何参考项目的代码片段、代码文件、二进制或数据文件进入组件；
-   允许的仅限：阅读、运行对照（oracle）、逆向分析、自行编写实现。
-3. 仓库状态变化后重新核验并更新条目，不追溯改写旧记录。
+2. 拉取/逆向的材料**一律放临时文件夹**，不得进入 git 仓库与组件目录。
+3. 组件内实现代码全部自研：材料只用于阅读/逆向/运行对照/理解行为。
+4. 仓库状态变化后重新核验并更新条目，不追溯改写旧记录。

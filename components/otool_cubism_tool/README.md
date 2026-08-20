@@ -4,11 +4,10 @@ M5Stack Tab5（ESP32-P4）上的 Live2D/Cubism 领域组件 —— 唯一承载 
 ESP-IDF 组件。`main` 只负责创建板级对象、注入端口并选择运行模式。
 
 > **主路线（2026-08-21 调整）**：组件内**自研 moc3/Core 兼容运行时**
-> （`SELF_CORE`，可行性报告路线 E）+ CPU 软光栅。官方 Core 与第三方
-> 重实现仅作为有来源记录的研究/oracle 角色。
-> **自研代码铁律**：组件内所有代码必须自研——禁止复制任何第三方代码片段、
-> 代码文件、二进制或数据文件；第三方项目与 SDK 仅作研究参考（阅读/逆向/
-> 运行对照），实现必须自行编写。
+> （`SELF_CORE`，可行性报告路线 E）+ CPU 软光栅。
+> **材料与代码规则（2026-08-21）**：允许联网拉取任何需要的代码、允许逆向
+> 任何文件；拉取/逆向的材料一律放**临时文件夹**（不进仓库/组件）；构成组件的
+> **代码仍全部自研**。REALTIME 构建门禁已移除。
 > 实现状态：S0 骨架 + 研发治理骨架（`research/`、`spec/`、`test/vectors/`）。
 
 ## 运行模式
@@ -25,7 +24,7 @@ ESP-IDF 组件。`main` 只负责创建板级对象、注入端口并选择运�
 |---|---|---|
 | `CONFIG_OTOOL_CUBISM_ENABLE_CLIP_PLAYER` | y | 预渲染播放模式（安全网/fallback） |
 | `CONFIG_OTOOL_CUBISM_ENABLE_STREAM_CLIENT` | n | 主机串流模式 |
-| `CONFIG_OTOOL_CUBISM_ENABLE_REALTIME` | n | 板端实时；开启即 FATAL（未实现） |
+| `CONFIG_OTOOL_CUBISM_ENABLE_REALTIME` | n | 板端实时；**构建门禁已移除**，当前为骨架（core 源码实现中） |
 | `CONFIG_OTOOL_CUBISM_CORE_BACKEND_*` | NONE | NONE / **SELF**；REALTIME 必须 SELF |
 | `CONFIG_OTOOL_CUBISM_MOC_PROFILE_V5` | y | 首版唯一可发布 moc3 profile（版本字节 5） |
 | `CONFIG_OTOOL_CUBISM_ANIMATION_BACKEND_SELF` | y | 动画后端：自研（唯一选项；不引入官方 Framework） |
@@ -71,10 +70,11 @@ s_tool.deinit();
 ## 项目定位与代码来源
 
 - 私有个人项目：不开源、不上市、不发布；允许逆向分析等研究方式。
-- **自研代码铁律**：组件内所有代码（固件 + 工具）必须自研；禁止复制任何
-  第三方代码片段、代码文件、二进制或数据文件。研究来源按
-  `research/reference_manifest.yml` 固定 commit/hash 并声明 reference-only。
-- 对外命名 "otool 独立 moc3-compatible runtime"；不引入官方 Framework，
-  不实现 `csm*` shim。
-- 完整工程 Gate 体系（G-FMT/G-BHV/G-SEC/G-TGT/G-RND/G-REL）见
-  `docs/live2d_feasibility.md` §6.6。
+- **允许联网**拉取任何需要的代码、**允许逆向任何文件**；材料一律放临时文件夹
+  （`%TEMP%/otool_cubism_research/`），不进仓库与组件。
+- 构成组件的代码（固件 + 工具）**全部自研**：材料只用于阅读/逆向/运行对照/
+  理解行为；不引入官方 Framework，不实现 `csm*` shim，不链接第三方二进制。
+- 研究材料按 `research/reference_manifest.yml` 记录来源（固定 commit/hash）。
+- 对外命名 "otool 独立 moc3-compatible runtime"。
+- 工程 Gate 体系（G-FMT/G-BHV/G-SEC/G-TGT/G-RND/G-REL，作为发布验收）
+  见 `docs/live2d_feasibility.md` §6.6。

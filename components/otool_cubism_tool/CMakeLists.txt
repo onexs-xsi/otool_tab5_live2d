@@ -3,10 +3,11 @@
 # 主路线：组件内自研 moc3/Core 兼容运行时（SELF_CORE，路线 E）。
 # 当前阶段：S0 骨架 + 研发治理骨架（spec/research/test 均为 draft）。
 #
-# 门禁规则：
-#   - REALTIME 尚未实现：开启即 FATAL_ERROR，直到 generated/core_feature_manifest.h
-#     由 spec/vector/corpus hash 生成并通过 G-FMT/G-BHV/G-SEC/G-TGT/G-RND/G-REL。
-#   - REALTIME 必须配 SELF backend；NONE 仅允许 clip/stream。
+# 材料与构建规则（2026-08-21）：
+#   - 允许联网拉取任何研究材料、允许逆向任何文件；材料一律放在临时目录，
+#     不得进入仓库/组件目录；组件内实现代码仍全部自研。
+#   - REALTIME 构建门禁已移除：REALTIME=y 可编译（当前为骨架，功能实现中，
+#     未实现部分以 WARNING 提示，不再 FATAL_ERROR）。
 #   - clip-only 构建不得出现 Core/Framework 符号。
 #   - 组件私有 C++ 统一 -fno-exceptions -fno-rtti。
 
@@ -21,31 +22,25 @@ if(CONFIG_OTOOL_CUBISM_ENABLE_STREAM_CLIENT)
     message(STATUS "otool_cubism_tool: STREAM_CLIENT enabled (implementation pending S2b)")
 endif()
 
-# ---- REALTIME 门禁（§4.6 / §6.6）----
+# ---- REALTIME 提示（门禁已移除，2026-08-21）----
 if(CONFIG_OTOOL_CUBISM_ENABLE_REALTIME)
     if(NOT CONFIG_OTOOL_CUBISM_CORE_BACKEND_SELF)
-        message(FATAL_ERROR
-            "otool_cubism_tool: REALTIME requires the SELF Core backend "
-            "(NONE is clip/stream only)")
+        message(WARNING
+            "otool_cubism_tool: REALTIME without SELF backend — NONE backend "
+            "provides clip/stream only; core sources will not be built")
     endif()
     if(NOT CONFIG_OTOOL_CUBISM_MOC_PROFILE_V5)
-        message(FATAL_ERROR
-            "otool_cubism_tool: REALTIME requires CONFIG_OTOOL_CUBISM_MOC_PROFILE_V5 "
+        message(WARNING
+            "otool_cubism_tool: REALTIME without CONFIG_OTOOL_CUBISM_MOC_PROFILE_V5 "
             "(only releasable profile for v1)")
     endif()
     if(CONFIG_OTOOL_CUBISM_ENABLE_V6_OFFSCREEN)
-        message(FATAL_ERROR
-            "otool_cubism_tool: v6 offscreen is a separate gated milestone; "
-            "not available yet")
-    endif()
-    if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/generated/core_feature_manifest.h")
-        message(FATAL_ERROR
-            "otool_cubism_tool: REALTIME is locked until generated/"
-            "core_feature_manifest.h exists (produced from approved spec/vector/"
-            "corpus hashes, not by editing a macro)")
+        message(WARNING
+            "otool_cubism_tool: v6 offscreen is not implemented yet; "
+            "the option currently has no effect")
     endif()
     # Gate 打开后在此追加 core/self 与 renderer 源文件
-    message(STATUS "otool_cubism_tool: REALTIME (SELF) sources pending")
+    message(STATUS "otool_cubism_tool: REALTIME (SELF) enabled — core sources pending")
 endif()
 
 idf_component_register(

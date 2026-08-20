@@ -4,7 +4,8 @@
 >
 > 本文件只声明 **目标 profile 与校验规则类别**。字段级二进制布局
 > （section 布局、offset/count 关系、元素尺寸、对齐要求）必须：
-> 1. 依据研究来源（见 research/reference_manifest.yml，允许逆向分析方式）整理；
+> 1. 依据研究材料整理——允许逆向任何文件（官方 Core 二进制、样例 moc3、
+>    参考实现源码等），材料放临时文件夹（%TEMP%/otool_cubism_research/）；
 > 2. 逐字段标注来源；
 > 3. 冻结后由 asset_validator 与固件 parser 共享同一份 schema 定义
 >    （各自独立实现，避免同一 bug 双重通过，可行性报告 §6.2）。
@@ -38,5 +39,5 @@
 ## 4. 冻结流程
 
 1. 选择生产模型并重导出（版本字节 5）→ corpus_tool 记录统计。
-2. 依据研究来源逐字段填写本文件 → 冻结为 v1（spec_version 标记 frozen）。
+2. 逆向/研究材料整理后逐字段填写本文件 → 冻结为 v1（spec_version 标记 frozen）。
 3. asset_validator 与固件 parser 按冻结版实现，双方跑同一组向量。

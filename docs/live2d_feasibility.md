@@ -9,10 +9,12 @@
 > **项目定位（2026-08-21 修订）**：私有个人项目，**不开源、不上市、不发布**；
 > 允许逆向分析等研究方式；本报告不设法律/合规门禁，只保留工程 Gate。
 >
-> **自研代码铁律（2026-08-21）**：构成组件的**所有代码必须自研**——不允许直接
-> 复制任何第三方代码片段、代码文件、二进制文件或数据文件进入组件；
-> 第三方项目与 SDK 仅作研究参考（阅读、逆向、运行对照、理解行为），
-> 所有实现必须基于自身研究重新编写。
+> **材料与代码规则（2026-08-21 修订）**：
+> - **允许**联网拉取任何需要的代码、**允许逆向任何文件**（含官方 Core 二进制、
+>   样例模型、参考实现）；拉取/逆向的材料一律放**临时文件夹**，不进仓库/组件；
+> - 构成组件的**代码仍全部自研**——材料只用于阅读/逆向/运行对照/理解行为；
+> - **REALTIME 构建门禁已移除**：REALTIME=y 可编译（当前为骨架，实现中）；
+> - 允许联网（组件依赖在线解析、研究材料直接拉取）。
 >
 > 状态：**已完成 <code>components/otool_cubism_tool</code> 的 S0 骨架；技术主路线为组件内自研 moc3/Core 兼容运行时 + CPU 软光栅。自研 Core 尚未实现，REALTIME 仍由构建门禁关闭。**
 
@@ -166,23 +168,24 @@ model3.json / moc3 / motion3 / physics3 / textures
 
 因此不把“Web Core + WASM/JS Runtime”列为可交付路线。
 
-### 3.4 研究与代码来源策略（自研代码铁律）
+### 3.4 研究与代码来源策略（材料放临时文件夹，组件代码自研）
 
-本项目为私有项目（不开源、不上市、不发布），允许逆向分析等研究方式；研究不设审批门禁。但存在**一条不可逾越的工程规则：组件内所有代码必须自研**。
+本项目为私有项目（不开源、不上市、不发布），允许逆向分析等研究方式；研究不设审批门禁。材料获取完全放开，但**材料必须与组件代码分离**：
 
-| 来源类别 | 允许行为 | 禁止行为 |
+| 来源类别 | 允许行为 | 材料存放 |
 |---|---|---|
-| 本地 Live2D SDK（third_party/CubismSdk） | 阅读、逆向分析格式、运行官方 Core 作行为 oracle、用模型做本地研究 | 复制其源码/二进制/模型文件进组件；测试向量不入库 |
-| GitHub 参考实现（PurismCore/Mocari/ayagami 等） | 阅读、运行对照（oracle）、理解结构与算法后**自行编写** | 复制任何代码片段、代码文件、二进制或数据文件 |
-| 逆向分析产物（hexdump、行为观察） | 作为实现依据自行编写 | 把反编译/反汇编产物原文复制进组件 |
-| 测试向量/输出 | 固定 hash 便于复现；可分发的最小自建 fixture | 直接提交受限制的模型/输出文件 |
+| 联网拉取的任何代码（GitHub 等） | 拉取、阅读、运行对照、理解行为 | **临时文件夹**（%TEMP%/otool_cubism_research/），不进仓库 |
+| 本地 Live2D SDK（third_party/CubismSdk） | 逆向分析格式、运行官方 Core 作行为 oracle、用模型做本地研究 | third_party（git 忽略，等同临时材料目录） |
+| 官方 Core 二进制、样例模型等任何文件 | 逆向任何文件 | 临时文件夹 |
+| 逆向分析产物（hexdump、行为观察） | 作为实现依据自行编写 | 临时文件夹；实现代码自研 |
+| 测试向量/输出 | 固定 hash 便于复现；可分发的最小自建 fixture | 临时文件夹；不入库 |
 
 执行细则：
 
-- 所有研究来源固定 URL / commit / hash 于 <code>research/reference_manifest.yml</code>，并声明 <code>allowed_use: reference-only</code>。
-- 参考项目的**设计思想**（分层、算法思路、错误处理类别）可借鉴，但实现必须逐行自研；禁止 diff 级复制、机械改写（换名/重排）与第三方代码并入。
-- 禁止把第三方二进制（Core .a、Framework 编译产物、SDK 工具）链接进固件或工具链。
-- 工具（corpus_tool、oracle_runner、asset_validator 等）同样自研；oracle_runner 允许**运行**第三方程序做输出对照，但不调用其库接口。
+- 所有研究材料固定 URL / commit / hash 于 <code>research/reference_manifest.yml</code>，并记录 <code>material_location</code>（临时目录）。
+- 参考项目的**设计思想**（分层、算法思路、错误处理类别）可借鉴，但进入组件的实现必须逐行自研；禁止 diff 级复制、机械改写（换名/重排）与第三方代码并入。
+- 禁止把第三方二进制（Core .a、Framework 编译产物、SDK 工具）链接进固件或工具链；oracle_runner 允许**运行**第三方程序做输出对照，但不调用其库接口。
+- **允许联网**：组件依赖在线解析、研究材料直接拉取；拉取的材料只落在临时目录。
 - 对外命名仍使用“<code>otool</code> 独立 moc3-compatible runtime”；不得声称它是官方 Cubism Core 或获得 Live2D 背书。
 
 ---
@@ -282,7 +285,7 @@ components/otool_cubism_tool/
     └── target/                       # B0～B6 与故障注入
 ~~~
 
-当前 SDK 位于仓库级 <code>third_party/CubismSdk</code>，Spike 阶段通过明确的 <code>CUBISM_SDK_ROOT</code> CMake cache 变量引用，禁止在组件中写死本机绝对路径。**组件不链接官方 Core、Framework 或任何第三方重实现**（自研代码铁律）。禁止 configure 阶段联网下载、跟随分支或静默替换版本。
+当前 SDK 位于仓库级 <code>third_party/CubismSdk</code>（git 忽略，等同临时材料目录），Spike 阶段通过明确的 <code>CUBISM_SDK_ROOT</code> CMake cache 变量引用，禁止在组件中写死本机绝对路径。**组件不链接官方 Core、Framework 或任何第三方重实现**（组件代码自研）；联网拉取的研究材料一律放临时文件夹。允许联网解析组件依赖；禁止跟随分支或静默替换版本。
 
 ### 4.3 内部模块职责
 
@@ -397,7 +400,7 @@ main ──> otool_tab5_component
 
 <code>CMakeLists.txt</code> 按 Kconfig 追加源文件，而不是把所有 backend 编译后再在运行时选择。配置阶段必须执行以下检查：
 
-- 启用 REALTIME 却未选择 SELF，或 SELF 尚未生成通过 Gate 的 feature manifest：直接 <code>FATAL_ERROR</code>。
+- 启用 REALTIME 但未选择 SELF：WARNING 提示（NONE 只提供 clip/stream；**构建门禁已移除**，不再 FATAL_ERROR）。
 - 固件源码列表发现 official/purism/mocari backend、未知 vendor Core、第三方代码或未锁定依赖：直接失败。
 - 包声明的 moc 版本/feature 超出编译 profile：在任何大块内存分配前拒绝加载。
 - clip-only 构建不得出现 Core/Framework 未解析符号。
@@ -636,7 +639,7 @@ MVP 的完成面为 C0～C6 中**生产模型实际使用的子集**；没有用
 
 以下结论按 2026-08-21 的仓库状态核验；实现前由 <code>corpus_tool</code> 或维护者重新固定 commit 和 hash。本表是**能力参考**，不是合规门禁。
 
-| 项目 | 已核验能力/限制 | 本项目用途（一律 reference-only） |
+| 项目 | 已核验能力/限制 | 本项目用途（材料放临时文件夹，代码自研） |
 |---|---|---|
 | [SakuraMotion/PurismCore](https://github.com/SakuraMotion/PurismCore) | MIT、C99；项目宣称 Core v5/v6 ABI 与 MOC3 5.3 支持。仓库很新；公开可复现测试远少于 README 所述内部测试，公开 CI 无 ESP/RISC-V 真机 | 结构/算法研究、PC 对照进程、性能比较；不复制代码，不把其输出单独当 ground truth |
 | [Eatgrapes/Mocari](https://github.com/Eatgrapes/Mocari) | MIT、Rust；0.4.0 含 v1～v6 parser、参数/形变/animation 与 backend-neutral render 辅助，测试面较丰富 | PC oracle、算法边界交叉检查、测试向量生成；不复制代码，不移植到 ESP 固件 |
@@ -686,7 +689,7 @@ MVP 的完成面为 C0～C6 中**生产模型实际使用的子集**；没有用
 | G-RND Rendering | B3/B4/B6 满足第 7.3 节，遮罩/混合/颜色差分通过 | 降分辨率/模型复杂度；失败则不发布 REALTIME |
 | G-REL Release | hash 锁定、三配置 CI、2 小时稳定性、异常 fallback 全通过 | REALTIME 保持 Kconfig off |
 
-任一 Gate 失败都不会把研究代码“临时”并入发布。REALTIME 的 build unlock 应由版本化的 <code>generated/core_feature_manifest.h</code> 和 CI 证明共同触发，而不是开发者手改一个宏。
+任一 Gate 失败都不会把研究代码“临时”并入发布。REALTIME 的**构建门禁已于 2026-08-21 移除**（可随时编译 REALTIME=y）；Gate 仍作为发布验收门槛：功能质量与稳定性不达标时，发布配置不得开启 REALTIME。
 
 ---
 
@@ -851,12 +854,11 @@ USB/Wi-Fi 具体收发驱动通过 stream port 注入，组件内部只实现统
 - 除 <code>include/otool_cubism_*.h</code> 外没有私有头文件进入公共 include path；
 - 组件目录之外不得 include self Core 私有头、Framework/第三方 Core 头文件或引用其符号；
 - 发布固件的 link map 不得出现官方 Core、PurismCore、Mocari 或其他研究 oracle；
-- 不存在本机绝对路径、configure 阶段下载和未锁定的分支依赖；
-- **代码来源审计**：组件内所有源码/头文件为自研；不包含第三方代码片段（可运行相似性检查或逐文件来源声明）；
+- 不存在本机绝对路径和未锁定的分支依赖；允许联网解析组件依赖；
+- **代码来源审计**：组件内所有源码/头文件为自研；不包含第三方代码片段（可运行相似性检查或逐文件来源声明）；研究材料一律在临时文件夹；
 - manifest/moc3/frame parser 与状态机在 host test 中覆盖截断、越界、整数溢出、引用错误、cycle、重复、乱序、CRC/hash/signature 错和版本不兼容；
 - display lease、JPEG/PPA 超时、SD 拔出、串流断开和模型加载失败均能回滚到确定状态；
 - 100 次完整生命周期后任务数、内部 RAM、PSRAM largest block 和硬件 client 数回到允许误差内；
-- <code>generated/core_feature_manifest.h</code> 可追溯到 spec/vector/corpus hash，不能由手改宏解锁；
 - <code>reference_manifest.yml</code>、测试报告齐全；
 - <code>README.md</code> 明确每个 Kconfig 的 Flash/RAM 影响、实际支持的 moc3 profile 和最小调用示例。
 
@@ -888,7 +890,7 @@ USB/Wi-Fi 具体收发驱动通过 stream port 注入，组件内部只实现统
 ## 12. 立即可执行的任务清单
 
 1. 选择唯一生产模型；由 <code>corpus_tool</code> 记录 SHA-256、moc 版本字节、参数/part/deformer/drawable/keyform/mask/offscreen/纹理统计。能重导出时固定为版本字节 5。
-2. 在组件中完善 <code>research/reference_manifest.yml</code>、<code>spec/</code>、<code>spec/test_vector_schema.md</code> 和 <code>test/vectors/</code>；固定各参考项目 commit/hash，提交 schema、hard limits 和错误码；**所有来源声明 reference-only**。
+2. 在组件中完善 <code>research/reference_manifest.yml</code>、<code>spec/</code>、<code>spec/test_vector_schema.md</code> 和 <code>test/vectors/</code>；固定各参考项目 commit/hash，提交 schema、hard limits 和错误码；**拉取/逆向材料一律放临时文件夹，组件代码自研**。
 3. 在 host 工具中实现 <code>bounded_reader → validator → immutable IR → memory plan</code>（自研），先让截断/溢出/错引用/cycle/fuzz 测试通过，再共享可移植源码到 ESP 组件。
 4. 按 C0～C6 实现 <code>ot_core_*</code>（自研），每完成一层就提交可追溯向量与差分报告；首版不实现 v6/offscreen，不实现 <code>csm*</code> shim。
 5. 并行完成 <code>otool_lvgl_idf_port</code> display lease、B0～B2 和 CLIP_PLAYER，使自研研发期间始终有可演示/fallback 版本。
@@ -1037,5 +1039,26 @@ USB/Wi-Fi 具体收发驱动通过 stream port 注入，组件内部只实现统
 - **允许的研究方式**：阅读参考实现、运行第三方程序做 oracle 对照（运行对照
   不等于复制代码）、逆向分析格式、自行编写实现。
 - **下一步**：冻结生产模型 → C0 安全解析器（自研）。
+
+### 2026-08-21 — 材料放开 + 去除 REALTIME 构建门禁 + 允许联网
+
+- **决策（用户要求）**：
+  1. **允许拉取任何需要的代码、允许逆向任何文件**（含官方 Core 二进制、样例模型、
+     参考实现源码）；拉取/逆向的**材料一律放临时文件夹**（%TEMP%/otool_cubism_research/），
+     不进 git 仓库与组件目录；构成组件的代码仍全部自研。
+  2. **去除 REALTIME 构建门禁**：REALTIME=y 不再 FATAL_ERROR，可随时编译
+     （当前为骨架，core/renderer 源码按开发进度加入构建）；相关 WARNING 提示保留。
+  3. **允许联网**：组件依赖在线解析、研究材料直接拉取。
+- **CMakeLists.txt**：删除 REALTIME 全部 FATAL_ERROR（feature manifest 检查、
+  SELF 后端检查、profile 检查、v6 检查），改为 WARNING/STATUS 提示。
+- **Kconfig**：REALTIME / V6_OFFSCREEN help 更新（不再声称构建失败）。
+- **research/reference_manifest.yml**：`allowed_use: reference-only` → `material_location`
+  （临时文件夹）；规则更新为"拉取/逆向材料放临时目录，组件代码自研"。
+- **文档**：§3.4 重写为"材料放临时文件夹，组件代码自研"（允许/存放对照表）；
+  §4.2/§4.6/§6.6/§10.2 移除联网下载限制与 feature_manifest 机制描述；
+  §14 移除 hard_limits 对 generated/core_feature_manifest.h 的引用。
+- **保留的规则**：组件代码自研（不复制第三方代码进组件）、材料不入仓库、
+  不链接第三方二进制、固定 commit/hash（可复现）、clip-only 不链接 Core/Framework。
+- **下一步**：逆向 moc3 格式（材料放临时目录）→ C0 安全解析器（自研）。
 
 ---
