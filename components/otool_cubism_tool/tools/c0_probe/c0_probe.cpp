@@ -70,11 +70,135 @@ int main(int argc, char **argv)
     const char *tex_path = do_render ? argv[3] : nullptr;
     const char *tex_meta = do_render ? argv[4] : nullptr;
     const char *ppm_path = do_render ? argv[5] : nullptr;
+    const bool do_oracle = argc >= 6 && std::strcmp(argv[2], "--oracle") == 0;
+    const char *oracle_path = do_oracle ? argv[3] : nullptr;
+    const char *tex_path_o = do_oracle ? argv[4] : nullptr;
+    const char *tex_meta_o = do_oracle ? argv[5] : nullptr;
 
     FILE *f = std::fopen(argv[1], "rb");
     if (f == nullptr) {
         std::printf("cannot open %s\n", argv[1]);
         return 2;
+    }
+
+    /* --oracle 模式：加载官方 Core 顶点 dump（mao_oracle.txt）渲染 */
+    if (do_oracle) {
+        FILE *of = std::fopen(oracle_path, "r");
+        if (of == nullptr) {
+            std::printf("oracle: cannot open %s\n", oracle_path);
+            std::fclose(f);
+            return 2;
+        }
+        /* 读 canvas 行 */
+        char line[8192];
+        float cw = 0, ch = 0;
+        while (std::fgets(line, sizeof(line), of)) {
+            if (std::sscanf(line, "canvas: %f %f", &cw, &ch) == 2) break;
+        }
+        std::printf("oracle: canvas %g x %g\n", cw, ch);
+        /* 读纹理 */
+        int tw = 0, th = 0;
+        char mjson[512] = {0};
+        FILE *mf = std::fopen(tex_meta_o, "rb");
+        if (mf) {
+            (void)std::fread(mjson, 1, sizeof(mjson) - 1, mf);
+            std::fclose(mf);
+            const char *kw = std::strstr(mjson, "\"width\"");
+            const char *kh = std::strstr(mjson, "\"height\"");
+            if (kw) std::sscanf(kw + 8, "%d", &tw);
+            if (kh) std::sscanf(kh + 9, "%d", &th);
+        }
+        FILE *tf = std::fopen(tex_path_o, "rb");
+        std::fseek(tf, 0, SEEK_END);
+        long tsz = std::ftell(tf);
+        std::fseek(tf, 0, SEEK_SET);
+        uint16_t *tex = (uint16_t *)std::malloc((size_t)tsz);
+        if (!tex || std::fread(tex, 1, (size_t)tsz, tf) != (size_t)tsz) {
+            std::printf("oracle: texture read failed\n");
+            return 2;
+        }
+        std::fclose(tf);
+
+        constexpr uint16_t FB_W = 640, FB_H = 360;
+        uint16_t *fb_data = (uint16_t *)std::calloc(FB_W * FB_H, 2);
+        frame_buffer fb = {fb_data, FB_W, FB_H};
+        texture_ref texref = {tex, (uint16_t)tw, (uint16_t)th};
+        fb_clear(fb, 0);
+
+        /* fit：画布 → 屏幕 */
+        const float s = (FB_W / cw < FB_H / ch) ? FB_W / cw : FB_H / ch;
+        const float ox = ((float)FB_W - cw * s) * 0.5f;
+        const float oy = ((float)FB_H - ch * s) * 0.5f;
+
+        /* 逐 drawable：解析 D 行顶点 + 用 IR 的 UV/indices 渲染 */
+        /* 先读 moc3 建 IR（拿 UV/indices） */
+        std::fseek(f, 0, SEEK_SET);
+        long msz = 0;
+        std::fseek(f, 0, SEEK_END);
+        msz = std::ftell(f);
+        std::fseek(f, 0, SEEK_SET);
+        uint8_t *mbuf = (uint8_t *)std::malloc((size_t)msz);
+        if (!mbuf || std::fread(mbuf, 1, (size_t)msz, f) != (size_t)msz) {
+            std::printf("oracle: moc3 read failed\n");
+            return 2;
+        }
+        moc3_ir ir = {};
+        err_info ir_err = {};
+        err_code ir_rc = moc3_build_ir(mbuf, (size_t)msz, &ir, &ir_err);
+        if (ir_rc != ERR_OK) {
+            std::printf("oracle: ir build failed %x\n", (unsigned)ir_rc);
+            return 2;
+        }
+        std::rewind(of);
+        /* 每 drawable 解析：D<idx> vc=N ... 顶点序列 */
+        float scr[1024 * 2], uv[1024 * 2];
+        int nd = 0;
+        while (std::fgets(line, sizeof(line), of)) {
+            int idx = -1, vc = 0;
+            float opa = 1.0f;
+            char *lp = line;
+            if (std::sscanf(lp, "D%d vc=%d opa=%f", &idx, &vc, &opa) != 3) continue;
+            /* 跳到 ':' 后的顶点 */
+            char *colon = std::strchr(lp, ':');
+            if (!colon || vc <= 0 || vc > 1024) continue;
+            char *p = colon + 1;
+            for (int v = 0; v < vc; ++v) {
+                float x = 0, y = 0;
+                if (std::sscanf(p, " %f,%f", &x, &y) != 2) break;
+                scr[v * 2 + 0] = x * cw * s + ox;   /* 归一化 × 画布 → fit */
+                scr[v * 2 + 1] = y * ch * s + oy;
+                p = std::strchr(p + 1, ' ');
+                if (!p) break;
+            }
+            /* UV/indices 从 IR 取 */
+            const int32_t *uv_b = ir.i32(SLOT_AM_UV_BEGIN);
+            const int32_t *ib = ir.i32(SLOT_AM_IDX_BEGIN);
+            const int32_t *ic = ir.i32(SLOT_AM_IDX_COUNT);
+            const float *uv_pool = ir.f32(SLOT_UV);
+            const uint16_t *idx_pool = ir.u16(SLOT_INDICES);
+            if (idx < 0 || idx >= ir.info.counts.v[CI_ART_MESHES]) continue;
+            for (int v = 0; v < vc; ++v) {
+                uv[v * 2 + 0] = uv_pool[(uv_b[idx] + v) * 2 + 0];
+                uv[v * 2 + 1] = 1.0f - uv_pool[(uv_b[idx] + v) * 2 + 1];
+            }
+            draw_mesh(fb, texref, scr, uv, &idx_pool[ib[idx]],
+                      (uint32_t)vc, (uint32_t)ic[idx], opa);
+            ++nd;
+        }
+        std::printf("oracle: rendered %d drawables\n", nd);
+        uint32_t lit = 0;
+        for (uint32_t i = 0; i < FB_W * FB_H; ++i) {
+            if (fb_data[i] != 0) ++lit;
+        }
+        std::printf("oracle: lit pixels=%u (%.1f%%)\n", lit,
+                    100.0 * (double)lit / (FB_W * FB_H));
+        /* TODO: PPM write crashes with 0xC0000409 - investigate later */
+        std::free(fb_data);
+        std::free(tex);
+        std::free(mbuf);
+        std::fclose(of);
+        std::fclose(f);
+        return 0;
     }
     std::fseek(f, 0, SEEK_END);
     long sz = std::ftell(f);
@@ -259,9 +383,11 @@ int main(int argc, char **argv)
                         (unsigned)uerr.index);
         } else {
             const float *m0 = &rt->mesh_pos[rt->mesh_off[0] * 2];
-            std::printf("update: am[0] final v0=(%g,%g) opacity=%g\n",
+            std::printf("update: am[0] v0=(%g,%g) v1=(%g,%g) v2=(%g,%g)\n",
                         (double)m0[0], (double)m0[1],
-                        (double)rt->mesh_opacity[0]);
+                        (double)m0[2], (double)m0[3],
+                        (double)m0[4], (double)m0[5]);
+            std::printf("oracle D0: v0=(0.115109,0.20448) v1=(0.111877,0.182658) v2=(0.107836,0.159221)\n");
             const int32_t n_ams = ir.info.counts.v[CI_ART_MESHES];
             int32_t visible = 0, inf_verts = 0;
             for (int32_t i = 0; i < n_ams; ++i) {
@@ -276,27 +402,6 @@ int main(int argc, char **argv)
                 }
             }
             std::printf("update: visible am=%d/%d inf_verts=%d\n", visible, n_ams, inf_verts);
-            const float *m13 = &rt->mesh_pos[rt->mesh_off[13] * 2];
-            std::printf("update: am[13] v0=(%g,%g) v1=(%g,%g)\n",
-                        (double)m13[0], (double)m13[1],
-                        (double)m13[2], (double)m13[3]);
-            std::printf("update: rot[0] origin=(%g,%g) angle=%g scale=%g\n",
-                        (double)rt->rot_origin_x[0], (double)rt->rot_origin_y[0],
-                        (double)rt->rot_angle[0], (double)rt->rot_scale[0]);
-            {
-                const int32_t pdi = ir.i32(SLOT_AM_PARENT_DEF)[13];
-                const int32_t pt = ir.i32(SLOT_DEF_TYPE)[pdi];
-                const int32_t pl = ir.i32(SLOT_DEF_LOCAL)[pdi];
-                std::printf("update: am[13] parent_def=%d type=%d local=%d\n",
-                            (int)pdi, (int)pt, (int)pl);
-                if (pt == 1 && pl >= 0 && pl < 60) {
-                    std::printf("update: rot[%d] (composed) origin=(%g,%g) angle=%g scale=%g opa=%g\n",
-                                (int)pl,
-                                (double)rt->rot_origin_x[pl], (double)rt->rot_origin_y[pl],
-                                (double)rt->rot_angle[pl], (double)rt->rot_scale[pl],
-                                (double)rt->rot_opacity[pl]);
-                }
-            }
         }
         core_runtime_destroy(rt);
 

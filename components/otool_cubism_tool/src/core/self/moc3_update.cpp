@@ -497,9 +497,12 @@ err_code core_update_frame(core_runtime *rt, const float *params, err_info *err)
             *ox = tmp[0];
             *oy = tmp[1];
         } else if (ptype == 1 && plocal >= 0 && plocal < n_rots) {
+            float tmp[2];
             rot_transform_point(rt->rot_angle[plocal], rt->rot_scale[plocal],
                                 rt->rot_origin_x[plocal], rt->rot_origin_y[plocal],
-                                x, y, ox);
+                                x, y, tmp);
+            *ox = tmp[0];
+            *oy = tmp[1];
         } else {
             *ox = x;
             *oy = y;

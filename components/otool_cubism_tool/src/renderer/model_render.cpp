@@ -58,6 +58,8 @@ void render_frame(const model_render_input &in, frame_buffer &fb, uint16_t bg_co
     const int32_t *am_tex = ir.i32(core::SLOT_AM_TEXTURE_NO);
 
     const float s = in.scale, ox = in.offset_x, oy = in.offset_y;
+    const float cw = ir.info.canvas_width;
+    const float ch = ir.info.canvas_height;
 
     /* 最终顶点缓存（栈）：MVP 单 mesh 顶点上限 512 */
     float scr[512 * 2];
@@ -86,8 +88,10 @@ void render_frame(const model_render_input &in, frame_buffer &fb, uint16_t bg_co
             continue; /* MVP 上限 */
         }
         for (int32_t j = 0; j < vc; ++j) {
-            scr[j * 2 + 0] = src_pos[j * 2 + 0] * s + ox;
-            scr[j * 2 + 1] = src_pos[j * 2 + 1] * s + oy;
+            /* update 输出的归一化坐标：x 已按画布宽归一，y 为官方 y 的相反数。
+             * 屏幕映射：x * cw * s + ox；y 取反后 * ch * s + oy（与官方一致）。 */
+            scr[j * 2 + 0] = src_pos[j * 2 + 0] * cw * s + ox;
+            scr[j * 2 + 1] = -src_pos[j * 2 + 1] * ch * s + oy;
             /* UV：画布无 Y_REVERSED 时反转 v（与 Core 行为一致） */
             uv[j * 2 + 0] = src_uv[j * 2 + 0];
             uv[j * 2 + 1] = (in.ir->info.canvas_flag & 0x01) == 0
