@@ -1,4 +1,4 @@
-# otool_tab5_live2d — Live2D 上屏与 otool_cubism_tool 组件化方案
+# otool_tab5_live2d — 自研 moc3/Core 与 otool_cubism_tool 组件化方案
 
 > 目标设备：M5Stack Tab5（ESP32-P4、16 MB Flash、32 MB PSRAM、1280×720 MIPI-DSI）
 >
@@ -6,7 +6,7 @@
 >
 > 复核日期：2026-08-21
 >
-> 状态：**目标架构已收敛为单一 <code>components/otool_cubism_tool</code> 组件；该目录当前为空、尚未实现。预渲染路线可直接实施，纯板端实时路线仍为有条件研发项**
+> 状态：**已完成 <code>components/otool_cubism_tool</code> 的 S0 骨架；技术主路线改为组件内自研 moc3/Core 兼容运行时 + CPU 软光栅。自研 Core 尚未实现，REALTIME 仍由构建门禁关闭。**
 
 ---
 
@@ -14,31 +14,38 @@
 
 ### 1.1 一句话结论
 
-ESP32-P4 **没有官方支持的 RISC-V Cubism Core，也没有 GPU**。因此：
+本项目选择：在唯一组件 <code>components/otool_cubism_tool</code> 内实现一个**独立的、模型子集优先的 moc3/Core 兼容运行时**，再连接组件自有 CPU 软光栅器和 Tab5 显示链路。公共实现使用 <code>ot_core_*</code> 内部 API；首版不追求官方全部 ABI、全部 moc3 版本或全部 5.3 特性。
 
-- 要最快、最可靠地做出独立运行的桌宠：采用 **PC 预渲染 + 板端硬件 JPEG 解码 + 交互状态机**。
-- 要保留完整实时 Live2D 行为且允许依赖电脑/服务器：采用 **主机实时渲染 + Tab5 串流显示和回传触摸**。
-- 要做完全独立、板端实时 Live2D：只能先联系 Live2D 获取官方 RISC-V Core；若无法获得，再对 **Purism Core + CPU 软光栅**做限时验证。只有 Core 等价性、渲染性能、内存稳定性和许可四类 Go/No-Go 门槛全部通过，才进入正式开发。
+**可行性判定：研发立项为 Conditional Go，产品发布仍为 No-Go。** 只有第 6.6 节 G-LGL/G-FMT/G-BHV/G-SEC/G-TGT/G-RND/G-REL 全部关闭，才能把 REALTIME 纳入发布配置。
+
+这是一项中长期研发，不是 2～5 周的普通移植。更可靠的落地方式是：
+
+- 先冻结唯一生产模型与导出档，优先重导出为 **moc3 版本字节 5 / SDK 5.0 档**，禁用 5.3 离屏和扩展混合；
+- 先交付安全解析器、不可变模型 IR 和目标模型所需的参数/形变功能，再逐项扩展；
+- 用独立测试向量、模糊测试和获准的 PC 对照程序验证行为，不能以“肉眼看起来相似”代替等价性；
+- 在自研实时链完成前，继续保留 <code>CLIP_PLAYER</code> 作为设备可用版本和运行时故障降级；
+- GitHub 项目只按经过记录的用途使用。开源许可证不自动消除格式来源、第三方权利或既有合同风险。
 
 ### 1.2 路线选择
 
-| 路线 | 独立运行 | 连续参数交互 | 可靠性 | 主要风险 | 建议 |
-|---|---:|---:|---:|---|---|
-| A. 官方 RISC-V Core + 软渲染 | 是 | 是 | 高（若官方提供） | 官方当前未公开提供；软渲染仍需自研 | **先询问 Live2D，最理想** |
-| B. Purism Core + 软渲染 | 是 | 是 | 低～中，待实测 | 新项目、无 ESP/RISC-V CI、兼容性与许可需独立确认 | **仅作限时 Spike** |
-| C. 主机实时渲染 + JPEG 串流 | 否 | 是 | 中～高 | 依赖主机、网络/USB 延迟 | **需要完整实时效果时推荐** |
-| D. 预渲染片段 + 交互状态机 | 是 | 离散状态 | 高 | 不是任意参数连续形变；素材占空间 | **当前最可靠的板端方案** |
-| E. 自研 moc3/Core 或在板端跑 Web Core | 是 | 是 | 低 | 格式/算法、性能、维护和许可风险都很高 | **不建议** |
+| 路线 | 独立运行 | 连续参数交互 | 当前成熟度 | 在本项目中的定位 |
+|---|---:|---:|---|---|
+| **E. 自研 moc3/Core + 软渲染** | 是 | 是 | 研发期 | **已选主路线**；先做单一生产 profile，不承诺全版本/全 ABI |
+| R. GitHub 参考实现 | 取决于项目 | 取决于项目 | 差异很大 | 仅作结构交叉检查、PC oracle 或测试素材来源；默认不直接成为固件 backend |
+| A. 官方 RISC-V Core + 软渲染 | 是 | 是 | 官方当前未公开支持 ESP/RISC-V | 若未来获得且条款允许，可作备选，不再阻塞主路线 |
+| C. 主机实时渲染 + JPEG 串流 | 否 | 是 | 中～高 | 可选完整效果方案；也是研发期间的联调手段 |
+| D. 预渲染片段 + 交互状态机 | 是 | 离散状态 | 高 | 可交付安全网和 REALTIME 故障 fallback，不取代主路线 |
 
-路线 A～D 不是四套分散工程，而是 <code>otool_cubism_tool</code> 的不同构建能力和运行模式。业务层只面对一个公共 API；Core、Framework、软光栅、JPEG 播放、串流、输入映射、显示提交和指标采集都留在组件内部。路线 E 不进入组件。
+上述能力全部归入 <code>otool_cubism_tool</code>。业务层只面对一个公共 API；自研 Core、动画层、软光栅、JPEG 播放、串流、输入映射、显示提交和指标采集都留在组件内部。Web Core/asm.js 方案仍排除。
 
 ### 1.3 推荐执行顺序
 
-1. 先建立 <code>components/otool_cubism_tool</code> 骨架、公共 API、Kconfig 和显示端口，再在其中完成 **路线 D**。
-2. 同时向 Live2D 书面询问 ESP32-P4/RISC-V Core、嵌入式硬件发布和许可条件。
-3. 用最多 2～3 个工作日完成路线 B 的 Core 等价性和板端更新时间 Spike。
-4. 再用最多 2～3 个工作日完成代表性软光栅基准。
-5. 任一硬门槛失败，组件就保持路线 D，或在允许主机依赖时启用路线 C；**不要直接扩大为“自研 Core”项目**。
+1. **先过 Legal/Provenance Gate**：书面确定允许的研究方法、可使用的模型/输出、GitHub 代码用途和发布边界；没有结论前只做不含格式实现的组件工作。
+2. 冻结生产模型 profile。若有工程源文件，优先导出为 moc3 版本字节 5，禁用 offscreen、扩展 blend，并固定 drawable/parameter/texture 上限。
+3. 在组件内建立 <code>spec/</code>、<code>research/reference_manifest.yml</code>、<code>test/vectors/</code> 和 PC 端 oracle 协议；先形成可审计规格，不先堆固件代码。
+4. 实现 bounds-checked moc3 parser → 不可变 IR → 独立 runtime arena；解析 Gate 通过后才实现参数绑定、插值、warp/rotation deformer、parts/artmesh。
+5. 先使用组件内部 <code>ot_core_*</code> API。只有 Framework 复用确实需要且许可允许时，才增加私有 <code>csm*</code> compatibility shim。
+6. Core 行为 Gate 通过后再连接 CPU 软光栅并跑 Tab5 B3～B6；任何阶段失败都保持 CLIP/STREAM 可用，不把未验证 REALTIME 带入发布构建。
 
 ---
 
@@ -58,14 +65,15 @@ ESP32-P4 **没有官方支持的 RISC-V Cubism Core，也没有 GPU**。因此�
 | 当前显示路径 | 物理 720×1280 RGB565；LVGL 逻辑 1280×720；PPA 做 90° 旋转 |
 | 当前显示内存 | 2 个 DSI RGB565 帧缓冲约 **3.52 MiB**，另有 1 个 LVGL 全屏逻辑缓冲约 **1.76 MiB**，合计约 **5.27 MiB** |
 | 当前构建模式 | **Debug / -Og**；现有配置不能用于推断最终渲染性能 |
-| IDF 版本 | 构建缓存和编译命令是 **v6.1-beta1**，但 <code>dependencies.lock</code> 写为 <code>6.1.0</code>；需统一并固定版本 |
+| IDF 版本 | 实际构建为 **v6.1-beta1**；<code>main/idf_component.yml</code> 已约束 <code>>=6.1.0-beta1,<6.2.0</code>，lock 中 <code>6.1.0</code> 是组件管理器规范化表示。仍需在报告中记录实际 IDF commit/toolchain，且 beta 本身是回归风险 |
 | Core API | 本地 5-r.5 头文件有 **55 个导出函数**，不是原报告所述“约 10 个” |
 | Framework 可编译性 | 排除官方 GPU 后端后，49 个 Framework C++ 源文件已用 ESP RISC-V GCC 15.2、<code>-O2 -fno-exceptions -fno-rtti</code> 静态交叉编译通过 |
-| Purism Core 可编译性 | v1.0.1（提交 <code>166785bb…</code>）16 个 C 源文件可用 ESP RISC-V GCC 15.2、<code>-O2 -Werror</code> 编译通过；需显式设置 <code>PSM_HAS_STDINT=0</code> |
+| Purism Core 可编译性 | v1.0.1（历史固定提交 <code>166785bb…</code>）16 个 C 源文件可用 ESP RISC-V GCC 15.2、<code>-O2 -Werror</code> 编译通过；需显式设置 <code>PSM_HAS_STDINT=0</code>。这只证明能生成目标文件，不代表本项目会采用其代码 |
 | Purism Core 可移植问题 | 不加上述宏时，ESP 工具链因 <code>int32_t</code> 映射为 <code>long</code>、API 返回 <code>int*</code> 而在 <code>param.c</code> 编译失败；必须固定补丁/编译选项并回归 |
 | 本地示例资源 | 8 个模型压缩文件总量约 0.7～4.9 MB/模型；moc3 约 0.1～0.9 MB；多数纹理为 2048×2048 |
+| 本地 moc3 版本 | 本地 5-r.5 头文件定义版本字节 1～6；8 个样例实际包含字节 1、3、5、6。只支持 1～5 的解析器无法加载本地 Ren 样例 |
 | Web Core | 本地 Web 5-r.5 提供内联 Emscripten/asm.js 的 <code>live2dcubismcore.js</code>，没有可直接交给嵌入式 WASM Runtime 的独立 <code>.wasm</code> 文件 |
-| 目标组件现状 | 当前工作区已有空目录 <code>components/otool_cubism_tool</code>，但没有 CMake、Kconfig、头文件或实现；第 4 节是待实施设计，不代表功能已经存在 |
+| 目标组件现状 | S0 骨架已经存在：CMake、Kconfig、公共头文件、生命周期状态机和默认时钟端口已实现；CLIP/STREAM 产帧、自研 Core、Renderer 和 REALTIME 尚未实现 |
 
 交叉编译通过只证明“源码能为 RISC-V 生成目标文件”，**不证明模型能正确加载、不证明数值等价、更不证明板端速度足够**。
 
@@ -76,11 +84,13 @@ ESP32-P4 **没有官方支持的 RISC-V Cubism Core，也没有 GPU**。因此�
 | “Core API 面很小，约 10 个函数” | 本地头文件实际为 55 个导出函数；ABI 兼容、动态标志、遮罩、颜色、离屏绘制都要验证 |
 | “moc3 格式与算法有公开文档，复刻本身不侵权” | 官方公开的是 Core API，不等于公开完整 moc3 格式/实现算法；官方专有许可还明确限制逆向工程。不能给出“不侵权”结论 |
 | “PurismCore_Old 成熟度中、适配工作量低” | 当前项目已迁至 <code>SakuraMotion/PurismCore</code>；仓库很新且无 ESP32/RISC-V CI，只能作为实验候选 |
+| “GitHub 项目有 MIT/Apache 许可证，所以可无条件复制并发布” | 仓库许可证只处理该仓库贡献者授予的权利；不能替代对代码来源、第三方权利、模型授权、商标和本项目已接受协议的审查 |
+| “参考开源代码实现也属于 clean-room” | 不成立。实现者看过同类实现后再编码是 reference-assisted；严格净室要求信息隔离、独立规格和未接触受限材料的实现团队 |
 | “Framework 直接编入 ESP-IDF 即可” | 基础源文件确实可交叉编译，但仍需统一封装进 <code>otool_cubism_tool</code>，并提供 PSRAM 对齐分配器、日志/文件系统策略和自定义 Renderer 工厂 |
 | “RGBA 2048² 纹理 4～8 MB” | 单张 RGBA8888 2048² 是 **16 MiB**；RGBA4444 是 **8 MiB**。Live2D 纹理需要 alpha，不能简单改成无 alpha 的 RGB565 |
 | “双核：一核形变、一核光栅可得 1.5～1.8×” | 同一帧光栅依赖 Core 更新后的顶点；直接并行存在依赖和数据竞争。应先更新，再按 tile 并行光栅，收益必须实测 |
 | “半分辨率 10～25 FPS、全分辨率 <5 FPS” | 当前没有板端三角形基准，且构建仍为 <code>-Og</code>。这些数字无证据，改为验收门槛而不是预测 |
-| “1～2 周完成” | 预渲染 MVP 可按天估算；纯板端实时属于 2～5 周甚至更长的研发项，且可能在 Gate 阶段终止 |
+| “1～2 周完成” | 自研 Core 的生产模型子集按单名资深工程师估算约 3～6 个月；多版本、完整语义和兼容 ABI 通常应按 6～12 个月以上管理。估算不含法务等待和模型制作 |
 
 ---
 
@@ -109,9 +119,22 @@ model3.json / moc3 / motion3 / physics3 / textures
 - ESP32-P4 的 PPA 能做矩形缩放、旋转、镜像、填充和图层混合，**不能光栅化带 UV 的三角网格**。
 - 所以板端实时路线无论采用哪个 Core，都仍然需要 CPU 软光栅器。
 
-### 3.2 MVP 必须限制模型特性
+### 3.2 MVP 必须冻结 moc3 版本和模型特性
 
-支持 Cubism 5-r.5 的全部 Renderer 特性会显著扩大工作量，尤其是 5.3 的离屏绘制和扩展颜色/alpha 混合。第一版只接受经过离线校验的模型：
+“能读取 MOC3 magic”不等于兼容某个模型。版本字节改变的不只是文件布局，还可能引入新的运行语义。本地 5-r.5 头文件给出的版本对应关系为：
+
+| 版本字节 | 导出版本范围 | MVP 策略 |
+|---:|---|---|
+| 1 | 3.0.00～3.2.07 | 回归样例；生产模型需要时再支持 |
+| 2 | 3.3.00～3.3.03 | 后续兼容 |
+| 3 | 4.0.00～4.1.05 | 回归样例；生产模型需要时再支持 |
+| 4 | 4.2.00～4.2.04 | 后续兼容 |
+| **5** | **5.0.00～5.2.03** | **首选生产 profile** |
+| 6 | 5.3.00+ | 单独里程碑；不得在只实现布局后宣称支持 |
+
+本地样例分布为：Haru/Natori/Wanko＝字节 1，Hiyori/Mark/Rice＝字节 3，Mao＝字节 5，Ren＝字节 6。它们适合做多版本回归发现，但首版的产品承诺仍只针对获准的生产 profile。
+
+第一版优先要求把自有生产模型重新导出为版本字节 5。若原始工程无法重导出，或模型必须使用版本字节 6 的 offscreen/扩展混合能力，项目经理必须重新批准范围、测试语料和工期，不能让 parser “尽量加载”。设备只接受离线校验并签名的模型包：
 
 | 约束 | MVP 规则 |
 |---|---|
@@ -122,10 +145,11 @@ model3.json / moc3 / motion3 / physics3 / textures
 | 遮罩 | 支持普通和反相 mask；数量与 atlas 尺寸由基准确定 |
 | 5.3 离屏绘制 | MVP 禁止 |
 | 扩展颜色/alpha blend mode | MVP 禁止 |
+| moc3 版本 | 首版只允许 manifest 声明且离线验证过的字节 5；未知或不匹配直接拒绝 |
 | 模型来源 | 固定、可信、随固件/SD 素材包发布；不接受用户上传任意 moc3 |
 | 超限行为 | 离线打包器直接报错，设备端拒绝加载，不能静默降级为错误画面 |
 
-应实现一个 PC 端 <code>asset_validator</code>，输出 Drawable、顶点、三角形、mask、纹理、blend mode、offscreen、moc 版本和预计 RAM；只有通过 profile 的包才允许上板。
+应实现一个与固件 parser 共享 schema、但不共享不安全快捷路径的 PC 端 <code>asset_validator</code>，输出 Drawable、顶点、三角形、deformer 深度、keyform 数、mask、纹理、blend mode、offscreen、moc 版本和预计 RAM；只有通过 profile 且包签名/哈希正确的资源才允许上板。
 
 ### 3.3 Web SDK 不是捷径
 
@@ -137,6 +161,26 @@ model3.json / moc3 / motion3 / physics3 / textures
 - 修改/抽取官方专有产物的许可风险。
 
 因此不把“Web Core + WASM/JS Runtime”列为可交付路线。
+
+### 3.4 “自研”与 clean-room 的治理边界
+
+本报告选择的是**独立兼容实现**，但必须先明确研发治理方式：
+
+| 方式 | 实现人员可接触的信息 | 优点 | 代价/结论 |
+|---|---|---|---|
+| **参考辅助实现（本工作区当前可采用）** | 经批准的公开文档、GitHub 项目、合法模型与测试输出 | 快，适合小团队 | 不是严格 clean-room；每个来源必须记录用途、许可证和 provenance，发布前必须审查 |
+| **严格净室/黑盒实现** | 实现团队只接收法务批准的行为规格和测试向量，不接触官方 SDK 源码/二进制内部或其他重实现代码 | 证据链更清晰 | 需要规格团队/实现团队隔离、新仓库和访问控制，成本显著更高 |
+
+当前仓库已经包含 Live2D SDK，本次研究也核验了多个兼容实现；因此**不能把由当前上下文继续生成的实现称为严格 clean-room**。若法律负责人要求严格净室，应暂停本工作区的 Core 实现，建立隔离仓库，由未接触受限材料的人员依据批准后的规格重新实现。
+
+此外，Live2D 当前 Proprietary Software License Agreement 对逆向、反编译、反汇编及尝试发现源码有限制，并保留适用法律另有规定时的例外。适用条款会因取得软件的方式、地域和用途而不同；本报告只给工程门禁，不给“必然合法/不侵权”的结论。在 Legal/Provenance Gate 关闭前：
+
+- 不把第三方 Core 代码复制进 <code>components/otool_cubism_tool</code>；
+- 不用来源不明、无许可证、反编译/反汇编产物作为实现材料；
+- 不把官方 Core 自动化成差分 oracle，除非书面确认该用途被允许；
+- 不提交未经授权的官方示例模型、输出截图或二进制测试向量；
+- 所有研究来源写入 <code>research/reference_manifest.yml</code>，并固定 URL、commit、license、SHA-256、允许用途和审批人。
+- 对外命名使用“<code>otool</code> 独立 moc3-compatible runtime”；不得声称它是官方 Cubism Core、获得 Live2D 背书或与官方商标存在隶属关系。
 
 ---
 
@@ -152,18 +196,19 @@ model3.json / moc3 / motion3 / physics3 / textures
 |---|---|---:|---|---:|
 | <code>CLIP_PLAYER</code> | D | 不需要 | 素材包 → JPEG → presenter | **开启** |
 | <code>STREAM_CLIENT</code> | C | 不需要 | 帧协议 → JPEG → presenter | 可选 |
-| <code>REALTIME</code> | A/B | 需要一个 backend | Framework/Core → 软光栅 → presenter | Gate 通过后开启 |
+| <code>REALTIME</code> | E | 组件内 <code>SELF_CORE</code> | animation → self Core → 软光栅 → presenter | Gate 通过后开启 |
 
 统一集成不等于把 PC 工具编译进固件。离线验证、打包和对照工具归属该组件，但放在 <code>tools/</code> 下并从 <code>idf_component_register</code> 的源码列表中排除。
 
 强制边界：
 
 - 公共头文件不得暴露 <code>csmModel*</code>、Framework 类、PPA client、LVGL 对象或第三方容器类型。
-- Core backend、Framework、Renderer 和第三方头文件只能由组件私有源码包含。
+- self Core、可选 Framework adapter、Renderer 和第三方头文件只能由组件私有源码包含。
 - 业务代码不得绕过门面调用 Core，也不得直接写 DSI framebuffer。
 - <code>CLIP_PLAYER</code> 必须能在完全不链接 Core/Framework 的配置下独立构建。
 - 即使启用 <code>REALTIME</code>，<code>CLIP_PLAYER</code> 仍作为加载失败、运行超时或模型不兼容时的安全降级。
-- 路线 E 不提供 Kconfig 入口，不允许通过“临时宏”混入发布构建。
+- 固件 self Core 首先暴露组件私有 <code>ot_core_*</code> typed API；不为了宣称兼容而过早复制完整 <code>csm*</code> ABI。
+- PurismCore、Mocari 等研究候选不作为发布 Kconfig backend；若做本地比较，只能进入 host tools 或隔离的实验构建。
 
 ### 4.2 建议目录结构
 
@@ -173,7 +218,13 @@ components/otool_cubism_tool/
 ├── Kconfig
 ├── idf_component.yml
 ├── README.md
-├── LICENSES/                         # 第三方许可文本与书面结论
+├── LICENSES/                         # 第三方许可文本、NOTICE 与书面结论
+├── research/                         # 不进入固件
+│   └── reference_manifest.yml        # URL/commit/license/hash/来源/允许用途/审批
+├── spec/                             # 版本化的内部规格，不含受限代码
+│   ├── format/                       # 目标 moc3 版本的字段与校验规则
+│   ├── behavior/                     # 参数、插值、形变、flags 行为契约
+│   └── test_vector_schema.md         # oracle 输入/输出格式和误差规则
 ├── include/
 │   ├── otool_cubism_tool.h           # 唯一业务门面
 │   ├── otool_cubism_types.h          # 配置、事件、状态、指标
@@ -181,11 +232,31 @@ components/otool_cubism_tool/
 ├── src/
 │   ├── otool_cubism_tool.cpp         # 生命周期与状态机
 │   ├── runtime/                      # coordinator、队列、fallback
-│   ├── core/                         # backend-neutral adapter
-│   │   ├── core_adapter.cpp
-│   │   ├── official_backend.cpp      # 仅获官方 RISC-V Core 后启用
-│   │   └── purism_backend.cpp        # 仅 Spike/Gate 通过后启用
-│   ├── framework/                    # Framework 包装与 Renderer 工厂
+│   ├── core/
+│   │   ├── core_api.hpp              # 组件私有 ot_core_* typed API
+│   │   ├── self/
+│   │   │   ├── moc3_reader.cpp       # 只读、bounds-checked reader
+│   │   │   ├── moc3_validate.cpp     # 上限/引用/DAG/溢出验证
+│   │   │   ├── moc3_ir.cpp           # 文件布局 → 不可变 IR
+│   │   │   ├── arena.cpp             # 独立 runtime arena
+│   │   │   ├── parameter.cpp         # clamp/repeat/key search
+│   │   │   ├── interpolate.cpp       # 权重、插值与外推
+│   │   │   ├── deformer_graph.cpp    # 拓扑排序和 cycle 拒绝
+│   │   │   ├── deformer_warp.cpp
+│   │   │   ├── deformer_rotation.cpp
+│   │   │   ├── blendshape.cpp
+│   │   │   ├── part.cpp
+│   │   │   ├── artmesh.cpp
+│   │   │   ├── glue.cpp
+│   │   │   ├── draw_order.cpp
+│   │   │   ├── dynamic_flags.cpp
+│   │   │   ├── update.cpp
+│   │   │   └── offscreen_v6.cpp      # MVP 不编译，单独 Gate
+│   │   └── compat/
+│   │       └── csm_compat.cpp        # 可选、私有、行为稳定后再实现
+│   ├── animation/
+│   │   ├── self/                     # 默认：目标 profile 的 motion/expression/pose/physics
+│   │   └── framework_adapter/        # 可选：获准 Framework + 私有 csm shim
 │   ├── assets/                       # manifest、CRC、profile、缓存
 │   ├── renderer/                     # tile raster、blend、mask atlas
 │   ├── presenter/                    # JPEG、PPA、DSI、VSYNC
@@ -195,30 +266,36 @@ components/otool_cubism_tool/
 │   ├── metrics/                      # P50/P95/P99、堆、丢帧
 │   └── platform/                     # ESP-IDF allocator、clock、task
 ├── vendor/
-│   ├── manifest.lock                 # 版本、提交、补丁、SHA-256
-│   ├── live2d/                       # 经许可确认的 Framework/Core 内容
-│   └── purism_core/                  # 固定版本与本地补丁，可选
+│   ├── manifest.lock                 # 每个实际依赖的版本、补丁、SHA-256
+│   └── live2d_framework/             # 仅在条款允许且确需复用时导入
 ├── resources/
 │   └── fallback/                     # 可合法分发的最小 Flash 内置片段
 ├── tools/                            # PC 端，不进入固件
-│   ├── core_probe/
+│   ├── oracle_runner/                # 多实现进程隔离、统一 JSONL 协议
+│   ├── spec_probe/                   # 由获准团队生成行为规格/向量
+│   ├── diff_runner/                  # static exact / float tolerance 比较
+│   ├── corpus_tool/                  # 资产清单、去重、版本/feature 统计
 │   ├── asset_validator/
 │   ├── asset_packer/
 │   └── clip_packer/
 └── test/
-    ├── host/                         # parser、状态机、差分测试
+    ├── vectors/                      # 仅存可合法分发或私有 CI 的向量
+    ├── host/                         # parser、算法、property、差分测试
+    ├── fuzz/                         # parser/update seed、dictionary、harness
     └── target/                       # B0～B6 与故障注入
 ~~~
 
-当前 SDK 位于仓库级 <code>third_party/CubismSdk</code>。Spike 阶段可以通过明确的 <code>CUBISM_SDK_ROOT</code> CMake cache 变量引用它，但禁止在组件中写死本机绝对路径。进入 CI/发布前，应通过受控导入脚本把获准文件放入 <code>vendor/live2d</code>，同时生成 <code>manifest.lock</code>；不得在 configure 阶段联网下载、跟随 <code>master</code> 或静默替换版本。
+当前 SDK 位于仓库级 <code>third_party/CubismSdk</code>，所以本仓库只能按“参考辅助实现”治理。发布版 self Core 不链接官方 Core 或第三方重实现。若动画层确需复用官方 Framework，必须单独通过条款审查并用受控导入脚本写入 <code>vendor/live2d_framework</code> 与 <code>manifest.lock</code>；否则实现组件自有的目标子集。禁止写死本机路径、configure 阶段联网下载、跟随分支或静默替换版本。
 
 ### 4.3 内部模块职责
 
 | 内部模块 | 唯一职责 | 允许依赖 |
 |---|---|---|
 | facade/runtime | 生命周期、状态迁移、错误恢复、模式切换 | 其余内部接口 |
-| core | 抹平官方/Purism ABI；输出组件自有 draw snapshot | vendor Core |
-| framework | motion、expression、physics、model 生命周期 | core、assets |
+| core/self | 安全读取目标 moc3、维护 runtime arena、计算 drawable 状态 | spec、assets、platform allocator |
+| core/compat | 可选的私有 <code>csm*</code> shim；不得成为公共 API | core/self |
+| animation/self | 默认 animation backend；目标 profile 的 motion、expression、pose、physics | core/self、assets |
+| animation/framework_adapter | 可选的官方 Framework 封装，不得越过 facade | core/compat、assets、受控 vendor |
 | assets | 可信包、manifest/profile/CRC、按需读取 | storage port |
 | renderer | 纹理三角形、blend、mask、tile worker | draw snapshot、assets |
 | presenter | JPEG decode、PPA scale/rotate、VSYNC present | display port、IDF driver |
@@ -227,7 +304,7 @@ components/otool_cubism_tool/
 | input | 触摸/音量/命令归一化，不直接改 Core | runtime queue |
 | metrics | 分阶段耗时、内存、丢帧、错误计数 | 只读观测点 |
 
-内部依赖必须保持单向；例如 presenter 不得反调 player，renderer 不得读取 LVGL 全局状态，Core backend 不得自行打开文件。
+内部依赖必须保持单向；例如 presenter 不得反调 player，renderer 不得读取 LVGL 全局状态，self Core 不得自行打开文件或访问显示。parser 只把字节变成经过验证的不可变 IR；update 不再解释原始 offset。
 
 ### 4.4 公共 API 与生命周期
 
@@ -310,36 +387,41 @@ main ──> otool_tab5_component
 
 ### 4.6 CMake 与 Kconfig 约束
 
-建议至少提供：
+S0 代码当前仍保留历史的 <code>NONE/OFFICIAL/PURISM</code> 选项；这是尚未实现 REALTIME 时的占位状态，不是新的目标设计。进入 Core R1 前应把 Kconfig 收敛为：
 
 | 配置 | 规则 |
 |---|---|
 | <code>CONFIG_OTOOL_CUBISM_ENABLE_CLIP_PLAYER</code> | 默认开启 |
 | <code>CONFIG_OTOOL_CUBISM_ENABLE_STREAM_CLIENT</code> | 默认关闭 |
 | <code>CONFIG_OTOOL_CUBISM_ENABLE_REALTIME</code> | 默认关闭，Gate 通过后才允许发布配置开启 |
-| <code>CONFIG_OTOOL_CUBISM_CORE_BACKEND_*</code> | NONE/OFFICIAL/PURISM 三选一；REALTIME 禁止 NONE |
+| <code>CONFIG_OTOOL_CUBISM_CORE_BACKEND_*</code> | NONE/SELF 二选一；REALTIME 必须为 SELF |
+| <code>CONFIG_OTOOL_CUBISM_MOC_PROFILE_V5</code> | 首版唯一可发布 profile；与包 manifest 双向校验 |
+| <code>CONFIG_OTOOL_CUBISM_ANIMATION_BACKEND_*</code> | SELF/APPROVED_FRAMEWORK 二选一；默认 SELF |
+| <code>CONFIG_OTOOL_CUBISM_ENABLE_CSM_COMPAT</code> | 默认关闭；只在已批准 Framework adapter 时开启 |
+| <code>CONFIG_OTOOL_CUBISM_ENABLE_V6_OFFSCREEN</code> | 默认关闭；独立版本/渲染 Gate 通过后才能开启 |
 | <code>CONFIG_OTOOL_CUBISM_RENDER_SIZE_*</code> | 640×360 / 512×288 / 320×180 三选一 |
 | <code>CONFIG_OTOOL_CUBISM_RASTER_WORKERS</code> | 1 或 2，由 B3/B6 决定 |
 | <code>CONFIG_OTOOL_CUBISM_METRICS</code> | 开发默认开启，发布保留低成本计数 |
 
 <code>CMakeLists.txt</code> 按 Kconfig 追加源文件，而不是把所有 backend 编译后再在运行时选择。配置阶段必须执行以下检查：
 
-- 启用 REALTIME 却没有唯一 Core backend：直接 <code>FATAL_ERROR</code>。
-- 选择 OFFICIAL 但缺少获准的 RISC-V 库、头文件或哈希不符：直接失败。
-- 选择 PURISM 但版本/补丁/宏不匹配：直接失败。
+- 启用 REALTIME 却未选择 SELF，或 SELF 尚未生成通过 Gate 的 feature manifest：直接 <code>FATAL_ERROR</code>。
+- 固件源码列表发现 official/purism/mocari backend、未知 vendor Core 或未锁定依赖：直接失败。
+- 选择 APPROVED_FRAMEWORK 却缺少审批、固定 manifest/license，或未开启所需 <code>csm</code> shim：直接失败；SELF 模式不得链接 Framework 符号。
+- 包声明的 moc 版本/feature 超出编译 profile：在任何大块内存分配前拒绝加载。
 - clip-only 构建不得出现 Core/Framework 未解析符号。
 - host tools、测试模型和官方示例素材不得进入固件镜像。
 - 仅 <code>resources/fallback</code> 中经许可确认且通过哈希校验的最小片段可用 <code>EMBED_FILES</code> 进入 Flash。
 - 组件私有 C++ 统一使用 <code>-fno-exceptions -fno-rtti</code>；不要修改整个工程的编译语义。
 
-CI 至少构建 <code>clip-only</code>、<code>clip+stream</code> 和一个获准的 <code>realtime</code> 配置，并保存 <code>idf.py size-components</code> 结果。
+CI 至少构建 <code>clip-only</code>、<code>clip+stream</code>、<code>realtime-self-v5</code>，并保存 <code>idf.py size-components</code> 结果。<code>realtime-self-v6</code> 只在相应 Gate 通过后加入；PC oracle 和研究依赖必须是另一套构建图。
 
 ### 4.7 三条运行路径汇合到同一 presenter
 
 ~~~text
 CLIP_PLAYER：   manifest/SD → clip scheduler → JPEG ─────────┐
 STREAM_CLIENT： transport → frame parser   → JPEG ──────────┼→ presenter
-REALTIME：      model → Framework/Core → soft renderer ─────┘
+REALTIME：      model → animation/self Core → soft renderer ┘
                                                         │
                                                         ▼
                                       PPA scale/rotate → DSI → VSYNC
@@ -351,7 +433,7 @@ REALTIME：      model → Framework/Core → soft renderer ─────┘
 参数/动作/物理
       │
       ▼
-Core 单线程更新
+self Core 单线程更新
       │  生成组件自有、只读 draw snapshot
       ▼
 按 tile 分发三角形 ── CPU0 / CPU1 光栅 worker
@@ -410,7 +492,7 @@ PPA 只负责最后一步的矩形像素处理。首选分辨率档位：
 |---|---|---|
 | runtime coordinator | 单一状态机任务 | 集中处理模式、资源和错误恢复 |
 | 输入/参数采样 | 短临界区或有界队列 | 不直接操作 Core 内存 |
-| Motion/Physics/Core update | 单线程 | 保证模型状态一致 |
+| Motion/Physics/self Core update | 单线程 | 保证模型状态一致 |
 | draw snapshot | 单线程复制必要指针/标量，或在更新暂停期只读 | 划定生命周期 |
 | tile raster | 1 或 2 worker A/B 实测 | 双核收益受 PSRAM 带宽限制 |
 | JPEG submit | 单一有界队列 | clip/stream 共用硬件 codec，避免抢占 |
@@ -439,9 +521,10 @@ PPA 只负责最后一步的矩形像素处理。首选分辨率档位：
 | 640×360 RGB565 场景缓冲 ×2 | 0.88 MiB | 一块渲染、一块交给 PPA；若同步足够可降为一块 |
 | 1024² RGBA4444 纹理 ×2 | 4.00 MiB | 保留 alpha；不要使用无 alpha 的纯 RGB565 |
 | 512² A8 mask atlas | 0.25 MiB | 数量按模型 profile 限制 |
-| moc3 可写对齐副本 | 0.1～0.9 MiB（示例范围） | Framework 通常会复制到对齐、可写内存，不能把压缩文件大小当零开销 |
-| Core model 工作区 | **待实测** | 由 <code>csmGetSizeofModel</code> 记录 |
-| Framework/Motion/Physics | **待实测** | JSON、容器和动作切换可能造成峰值及碎片 |
+| moc3 不可变 blob | 0.1～0.9 MiB（示例范围） | 只读、带长度；所有 offset 经 reader 检查，不能原地写入运行时指针 |
+| 已验证 IR/索引 | **待实测** | 只保存目标 profile 所需的 typed view、拓扑序和预计算索引 |
+| self Core runtime arena | **待实测** | 参数、part、deformer、drawable、flags 分区；由 <code>ot_core_query_memory()</code> 统一计算 |
+| Animation/Motion/Physics | **待实测** | JSON、容器和动作切换可能造成峰值及碎片；首版按目标资产限量 |
 | FreeRTOS 栈、队列、指标 | 待实测 | 栈优先放内部 RAM |
 | 安全余量 | 至少 6 MiB 或总 PSRAM 的 20%，取较大者 | 用于碎片、峰值和恢复 |
 
@@ -455,61 +538,167 @@ PPA 只负责最后一步的矩形像素处理。首选分辨率档位：
 
 ### 5.3 分配策略
 
-- 在组件 <code>platform/</code> 中实现自定义 <code>ICubismAllocator</code>：大于阈值的模型/纹理/帧缓冲放 PSRAM，小对象和任务栈留内部 RAM。
-- 所有 PPA、JPEG、Core 要求的 buffer 使用规定的地址和大小对齐；不要假定普通 <code>malloc</code> 足够。
+- 在组件 <code>platform/</code> 中实现统一 allocator/arena：大于阈值的模型、IR、纹理和场景缓冲放 PSRAM，小型控制块和任务栈留内部 RAM。只有复用官方 Framework 时才额外提供其 allocator adapter。
+- <code>ot_core_query_memory()</code> 必须使用 checked add/multiply 算出完整布局，随后一次分配、一次初始化；update 热路径不得按帧 malloc/free。
+- 所有 PPA、JPEG 和 self Core buffer 使用明确的地址/大小对齐；不要假定普通 <code>malloc</code> 或未对齐文件映射足够。
 - 启动、模型加载、动作切换和运行 30 分钟后分别记录：
   - 内部 RAM / PSRAM free、minimum free、largest free block；
-  - Core moc/model 实际申请；
+  - moc blob、validated IR、runtime arena 的实际字节和 high-water mark；
   - 每类纹理/mask/framebuffer 实际字节数。
 - 运行时不解析/保留原始 PNG；PC 端转换为设备格式，可选 LZ4 压缩，启动时一次解压到 PSRAM。
 - motion/physics 先限制数量并按需加载；若 JSON 峰值明显，再引入离线二进制格式。
+- 卸载顺序固定为：停止 update → 等待 renderer snapshot 归还 → 清 runtime arena → 清 IR → 释放 blob；禁止 renderer 持有跨代裸指针。
 - 连续执行至少 100 次 <code>init → load → start → stop → deinit</code>，确认内部 RAM、PSRAM、largest free block、PPA/JPEG client 和任务数量回到基线。
 
 ---
 
-## 6. Core 候选的可靠验证
+## 6. 自研 moc3/Core 的实现与验证方案
 
-### 6.1 候选顺序
+### 6.1 先定义组件内部契约，不先追完整官方 ABI
 
-1. **向 Live2D 申请/询问官方 RISC-V 构建**。官方 Core API 本身刻意避免内部内存分配，理论上适合嵌入式，但是否提供只能以官方书面回复为准。
-2. 官方无法提供时，Spike 使用 **SakuraMotion/PurismCore v1.0.1**，固定提交 <code>166785bb1d188bcf11c2dbf1b2476dd31f76a24f</code>。
-3. <code>moc3-reader-re</code> 已归档且主要是文件结构读取器，不是可替换 Core，不作为后备运行时。
-4. 不把“自行补齐解析/形变”作为失败后的默认备选；那是一个独立的长期项目。
+self Core 的产品职责是“可信模型包 + 参数状态 → 可渲染 draw snapshot”。它不读文件、不解 PNG、不跑 motion/physics、不碰 framebuffer，也不在 update 热路径分配内存。首版内部接口建议为：
 
-### 6.2 PC 双实现对照工具
+~~~c
+ot_core_result_t ot_core_inspect(
+    ot_core_bytes_t moc, const ot_core_limits_t *limits,
+    ot_core_model_info_t *out_info, ot_core_error_t *out_error);
 
-在 <code>components/otool_cubism_tool/tools/core_probe</code> 编写同一个对照协议，分别链接官方 Core 和候选 Core，给定相同 moc3 与参数序列，导出：
+ot_core_result_t ot_core_query_memory(
+    const ot_core_model_info_t *info, ot_core_memory_plan_t *out_plan);
 
-- Core/MOC 版本、canvas、参数/part/drawable 数量与 ID；
-- 参数范围、默认值、repeat/key；
-- indices、UV、texture index、mask、parent、constant flags；
-- 每步 update 后的 vertex、opacity、draw/render order、dynamic flags；
-- multiply/screen color、blend mode、offscreen 信息；
-- moc 大小、model 工作区大小和单次 update 时间。
+ot_core_result_t ot_core_create(
+    ot_core_bytes_t moc, ot_core_mut_bytes_t arena,
+    const ot_core_create_options_t *options, ot_core_model_t **out_model);
 
-测试集合不能只有 Haru：
+ot_core_result_t ot_core_set_parameters(
+    ot_core_model_t *model, const ot_core_parameter_update_t *updates, size_t count);
 
-- 本地 8 个官方示例模型；
-- 最终准备发布的目标模型；
-- default / min / max / 边界外参数；
-- 固定随机种子的参数向量；
-- 完整 motion + physics 轨迹；
-- 重复 update、reset dynamic flags 和动作切换。
+ot_core_result_t ot_core_update(ot_core_model_t *model);
+ot_core_result_t ot_core_get_draw_snapshot(
+    const ot_core_model_t *model, ot_core_draw_snapshot_t *out_snapshot);
+ot_core_result_t ot_core_reset_dynamic_flags(ot_core_model_t *model);
+~~~
 
-### 6.3 Core Gate
+接口约束：
 
-| 检查 | 通过条件 |
-|---|---|
-| ABI | 所需符号、枚举、结构大小、调用约定一致 |
-| 静态数据 | count、ID、indices、UV、mask、texture index 完全一致 |
-| 动态整数/标志 | order、flags、可见性完全一致 |
-| 浮点 | 映射到 640×360 后，顶点最大误差 ≤0.5 px、P99 ≤0.25 px；opacity/color 误差 ≤1e-4 |
-| 稳定性 | 每模型至少 10,000 次 update，无崩溃、越界、堆持续下降 |
-| 板端速度 | Core update P95 不超过总帧预算的 15% |
-| 板端内存 | 模型加载后满足第 5 节安全余量和 largest-block 要求 |
-| 许可 | 发布方式、Framework、Core 替代实现和模型素材均获负责人/法律确认 |
+- 核心实现使用可同时在 host/ESP 构建的受限 C++17：<code>-fno-exceptions -fno-rtti</code>，不依赖 iostream、文件系统或隐式分配容器；边界只使用固定宽度整数和 POD/span-like view。
+- 所有输入都携带长度；没有未绑定长度的裸 <code>void*</code>。
+- <code>inspect/query_memory/create</code> 使用同一份经过版本化的 limits；分配大小必须可重复计算。
+- moc blob 在模型生命周期内只读；文件 offset 永远不改写为指针。
+- IR 与 mutable runtime 分离；renderer 只能读取有代际号和有效期的 snapshot。
+- 相同 blob、初始值和参数序列必须产生确定性输出；错误必须包含稳定 error code、section 和 byte offset。
+- <code>csm*</code> 兼容层只是可选 adapter。先证明 <code>ot_core_*</code> 行为，再按 APPROVED_FRAMEWORK 的实际调用集实现 shim；不以本地头文件的约 55 个符号作为首版完成条件。默认 SELF_ANIMATION 完全不需要该 shim。
 
-任何一项失败都停止路线 B，并保持 <code>CONFIG_OTOOL_CUBISM_ENABLE_REALTIME=n</code>；不影响组件的 CLIP/STREAM 能力，也不以“肉眼看起来差不多”放行。
+### 6.2 安全 parser 与不可变 IR
+
+moc3 是二进制 offset/count 图。即使产品暂时只加载随包发布的可信模型，也必须按不可信输入设计 parser，因为坏 SD、截断下载、版本混用和工具链缺陷同样会产生畸形数据。
+
+加载流程固定为：
+
+~~~text
+signed package
+      │  manifest/version/size/hash/profile
+      ▼
+bounded byte reader
+      │  magic/endian/version/table/count/offset checked arithmetic
+      ▼
+structural validator
+      │  range/alignment/overlap/reference/cardinality/DAG/budget
+      ▼
+immutable typed IR + precomputed topology
+      │
+      └──> separately allocated mutable runtime arena
+~~~
+
+最低校验集：
+
+- 只接受 manifest 白名单中的版本和 endian；MVP 遇到版本字节 6、未知 flag 或非目标 profile 立即拒绝。
+- 每个 <code>offset + count × element_size</code> 都使用 checked arithmetic；在解引用、分配和类型转换之前验证。
+- 所有 section 必须位于 blob 内，满足该字段要求的对齐；不允许意外重叠、指向 header/table 或利用 wraparound 回到文件内。
+- count 必须同时满足格式关系和产品 hard limit，例如 parameters、deformers、drawables、vertices、indices、masks、keyforms 与总运行内存上限。
+- 所有 index、parent、mask、binding 和 keyform 引用做 referential-integrity 检查；deformer/part 依赖图必须可拓扑排序，并限制最大深度。
+- 浮点输入拒绝 NaN/Inf；需要有序的 key 序列必须验证单调性和重复键规则。
+- ID/字符串必须有界并转换成组件自有 ID 表，运行时不得在 blob 外查找终止符。
+- validator 完成前不建立 runtime pointer、不启动 update、不分配纹理；失败路径释放所有临时资源且保持旧模型可用。
+
+PC validator 和 ESP parser 应共享字段/schema 定义与测试向量，但分别保留实现边界，避免一个相同 bug 同时“验证”并“解析”成功。对生产包再叠加 manifest major version、总大小、逐文件 SHA-256/CRC、产品签名和 anti-rollback 规则；CRC 只用于误码检测，不能代替签名。
+
+### 6.3 按可观察行为分层实现
+
+每一层必须有独立输入/输出向量并通过 Gate，才能进入下一层：
+
+| 层 | 实现内容 | 可观察输出 |
+|---|---|---|
+| C0 Header/Profile | magic、version、endian、canvas、计数与预算 | 版本、canvas、拒绝原因、memory plan |
+| C1 Static Model | IDs、UV、indices、texture/mask/parent/constant flags | 所有静态数组精确匹配 |
+| C2 Parameters | default/min/max、clamp/repeat、key search、binding 组合 | key 区间、权重、参数 runtime 值 |
+| C3 Interpolation | 多参数 keyform 权重、边界和外推行为 | 规范化权重与 keyform 混合结果 |
+| C4 Deformer Graph | warp、rotation、反射、scale、parent 链、拓扑更新 | 每级 deformer 输出点和 opacity |
+| C5 Drawable State | part、artmesh、glue、draw/render order、opacity、color、flags | 顶点、顺序、可见性、动态 flags |
+| C6 Blend Shape | part/warp/rotation/artmesh blend shape 与 constraint | 各层增量和最终 drawable |
+| C7 v6 Advanced | offscreen、扩展颜色/alpha blend 等 5.3+ 语义 | offscreen pass 图和完整 snapshot |
+| C8 Compatibility | 实际需要的 <code>csm*</code> 调用集 | ABI smoke + 行为回归 |
+
+MVP 的完成面为 C0～C6 中**生产模型实际使用的子集**；没有用到的 feature 也必须被 parser 明确识别并拒绝，不能无声忽略。C7 和 C8 是独立里程碑。性能优化只能在正确性向量稳定后进行，并要求优化前后逐帧差分。
+
+### 6.4 GitHub 参考项目的可用边界
+
+以下结论按 2026-08-21 的仓库状态核验；实现前由 <code>corpus_tool</code> 或维护者重新固定 commit 和 hash。任何项目自己的“完全合法”“无需许可”陈述都只能视为项目方观点，不能替代本项目审查。
+
+| 项目 | 已核验能力/限制 | 本项目允许用途 | 不允许/不建议 |
+|---|---|---|---|
+| [SakuraMotion/PurismCore](https://github.com/SakuraMotion/PurismCore) | MIT、C99；项目宣称 Core v5/v6 ABI 与 MOC3 5.3 支持。仓库很新；公开可复现测试远少于 README 所述内部测试，公开 CI 无 ESP/RISC-V 真机 | 模块拆分参考、PC 对照进程、性能比较；参考辅助模式且审批后才能阅读/借鉴代码 | 不直接作为发布 firmware backend；不把其输出单独当 ground truth |
+| [Eatgrapes/Mocari](https://github.com/Eatgrapes/Mocari) | MIT、Rust；0.4.0 含 v1～v6 parser、参数/形变/animation 与 backend-neutral render 辅助，测试面较丰富 | PC oracle、算法边界交叉检查、测试向量生成 | 依赖 <code>std</code>、文件系统、集合/JSON/image，非 <code>no_std</code>；不直接移植到 ESP 固件 |
+| [AyagamiDev/ayagami](https://github.com/AyagamiDev/ayagami) | MIT/Apache-2.0；README 列出至 SDK 5.0 的 loader/driver，API 不稳定且缺 5.3、motion/physics 等；项目采用严格黑盒政策 | 只参考公开 README 中的分层思想和 [CONTRIBUTING 治理规则](https://github.com/AyagamiDev/ayagami/blob/main/CONTRIBUTING.md) | 其规则明确禁止 AI 分析/贡献；本项目不分析、复制或让 AI 评审其源码，也不向其提交贡献 |
+| [vtubing/moc3](https://github.com/vtubing/moc3) | MIT、Rust parser；README 仅列版本 1～5，提交和测试很少 | PC 端 layout 交叉检查 | 不是 runtime；不支持本地版本字节 6 样例，不作权威规格 |
+| [OpenL2D/moc3ingbird](https://github.com/OpenL2D/moc3ingbird) | 已归档、FDPL-1.0-US；ImHex pattern 到版本 5并明确称未完全验证，仓库含 DoS PoC | 安全审计思路、畸形 offset/count 类别、fuzz corpus 设计 | 不作 runtime/算法来源；PoC 不进设备和普通 CI，隔离运行 |
+| [Ludentes/py-moc3](https://github.com/Ludentes/py-moc3) | MIT、较新、测试少；项目材料表明实现来源含 Java 反编译链路 | 仅法务批准后的隔离离线交叉检查 | 不复制、不 vendor、不作为 clean-room 规格来源 |
+| [QiE2035/moc3-reader-re](https://github.com/QiE2035/moc3-reader-re) | 已归档、明确描述为 reversing、仓库未发现可依赖许可证；仅 reader | provenance 风险样例 | **排除代码、构建和测试依赖** |
+
+<code>research/reference_manifest.yml</code> 至少记录：<code>name</code>、<code>url</code>、<code>commit</code>、<code>retrieved_at</code>、<code>license_spdx</code>、license 文件 hash、源码 tarball hash、provenance 说明、<code>allowed_use</code>（code-reference/oracle/test-only/excluded）、审批 ticket 和本地补丁。仓库更新不会自动改变已批准用途。
+
+### 6.5 Oracle、差分与安全测试
+
+<code>tools/oracle_runner</code> 使用进程隔离的 JSONL/二进制 sidecar 协议，同一 case 分别运行 self Core 和获准的参考实现。官方 Core 只有在书面确认允许该测试用途时才能成为 oracle；Purism/Mocari/Ayagami 等第三方实现互相不构成正确性证明。可靠结论来自“批准的行为规格 + 自有模型预期 + 至少两个独立实现交叉结果 + 人工审查不一致项”。
+
+每个 case 至少包含：
+
+- 模型/向量 schema version、资源 SHA-256、moc version/feature bitmap、oracle 名称与固定 commit；
+- default/min/max/边界外/NaN 拒绝路径、repeat 参数和固定 seed 的参数向量；
+- motion/physics 轨迹由 animation 层展开成逐帧 Core 参数，避免把 animation 差异误判为 Core 差异；
+- create/update/reset flags/reload 的完整生命周期；
+- 静态数组、每层中间结果、最终 vertex/opacity/order/color/flags 和内存计划。
+
+比较规则：
+
+- ID、count、indices、UV bits（若规格要求）、mask、parent、texture index、order 和 flags：精确一致；
+- 浮点先比较 finite/符号/边界语义，再比较误差；最终映射到 640×360 时顶点 max ≤0.5 px、P99 ≤0.25 px，opacity/color 绝对误差 ≤1e-4；
+- 每个容差都写入 vector schema，禁止为了让测试通过而在实现后放宽；
+- 出现 oracle 分歧时 case 进入 quarantine，由规格负责人判定，不用“多数投票”自动生成真值。
+
+测试矩阵：
+
+- 有权使用的本地 8 个样例、最终生产模型、最小人工模型和每个支持 feature 的单功能模型；
+- parser unit/property tests：所有 section 截断点、最大 count、加乘溢出、错位/重叠、坏索引、cycle、NaN/Inf、未知版本/flag；
+- host ASan/UBSan/LSan + libFuzzer/AFL++：parser 与 update 各连续至少 24 小时或 1 亿次执行（先达到者），零 crash、越界、泄漏和未分类超时；
+- 每模型至少 10,000 次确定性 update，100 次 create/destroy，优化级别与 x86_64/ARM 主机交叉回归；
+- ESP 端 heap poisoning、stack canary、watchdog、故障注入和 2 小时 B6；fuzz PoC 只在隔离 host 环境运行。
+
+测试资产若不能合法进入仓库，CI 从访问受控的 artifact store 按 hash 取用；公开仓库只提交 manifest 和可分发的最小自建 fixture。
+
+### 6.6 必须逐级关闭的 Gate
+
+| Gate | 通过条件 | 失败后的动作 |
+|---|---|---|
+| G-LGL Legal/Provenance | 研究方法、参考仓库用途、官方 oracle、Framework、模型/向量和发布方式均有书面结论 | 不开始格式/行为实现；只继续 CLIP/显示工作 |
+| G-FMT Format/Profile | 生产模型版本/feature/上限冻结；C0～C1 全向量通过；畸形输入均得到稳定错误 | 修 profile、重导出模型或停止 REALTIME |
+| G-BHV Behavior | 生产所需 C2～C6 的静态精确项与浮点阈值全部通过；无未解释 oracle 分歧 | 不接 Renderer，不以截图验收代替 |
+| G-SEC Security | sanitizer、property/fuzz、100 次生命周期全部通过；解析峰值受预算限制 | 修 parser/runtime 后从 corpus 全量回归 |
+| G-TGT Target | ESP32-P4 create/update P95 ≤总帧预算 15%，内存满足第 5 节余量，无未对齐/PSRAM 故障 | 优化或缩 profile；失败则发布 CLIP/STREAM |
+| G-RND Rendering | B3/B4/B6 满足第 7.3 节，遮罩/混合/颜色差分通过 | 降分辨率/模型复杂度；失败则不发布 REALTIME |
+| G-REL Release | SBOM/NOTICE、hash 锁定、三配置 CI、2 小时稳定性、异常 fallback 全通过 | REALTIME 保持 Kconfig off |
+
+任一 Gate 失败都不会把研究代码“临时”并入发布。REALTIME 的 build unlock 应由版本化的 <code>generated/core_feature_manifest.h</code> 和 CI 证明共同触发，而不是开发者手改一个宏。
 
 ---
 
@@ -521,10 +710,10 @@ PPA 只负责最后一步的矩形像素处理。首选分辨率档位：
 
 - 单独建立并提交 release sdkconfig defaults；
 - 使用 performance/release 优化，同时保留必要的栈保护和错误检查；
-- 固定 ESP-IDF、工具链、LVGL、Core、模型包提交；
+- 固定 ESP-IDF、工具链、LVGL、self Core/spec/vector schema 和模型包提交；
 - 每份报告记录固件 SHA、芯片 revision、CPU/PSRAM 频率和温度。
 
-先解决当前 “IDF 路径为 v6.1-beta1、lock 为 6.1.0” 的不一致。若迁移稳定版，应单独做显示回归，不与 Live2D 优化混成一次变更。
+基准报告必须记录实际 IDF commit 与工具链；不能只引用规范化后的 lock 版本。若迁移稳定版，应单独做显示回归，不与 self Core/Renderer 优化混成一次变更。
 
 ### 7.2 基准顺序
 
@@ -535,7 +724,7 @@ PPA 只负责最后一步的矩形像素处理。首选分辨率档位：
 | B2 | microSD 连续读取 + JPEG→RGB565 + PPA | 证明预渲染路线 |
 | B3 | 代表性 textured triangle：nearest/bilinear、alpha、三种 blend | 判断软光栅是否值得继续 |
 | B4 | mask atlas 生成与 masked draw | 量化遮罩成本 |
-| B5 | Core load/update | 量化模型工作区与更新时间 |
+| B5 | self Core inspect/create/update | 量化 blob/IR/arena、初始化峰值与更新时间 |
 | B6 | 完整一帧：update + raster + present | 最终端到端结果 |
 
 每个阶段输出 P50/P95/P99，不只输出平均 FPS。B0～B6 固件放入 <code>components/otool_cubism_tool/test/target</code>，直接复用正式 allocator、presenter、metrics 和端口实现，避免“独立 demo 很快、集成后完全不同”。
@@ -555,9 +744,9 @@ PPA 只负责最后一步的矩形像素处理。首选分辨率档位：
 
 ---
 
-## 8. 最可靠的 MVP：预渲染交互播放器（路线 D）
+## 8. 自研期间的可交付安全网：预渲染交互播放器（路线 D）
 
-该路线实现为 <code>otool_cubism_tool</code> 的 <code>CLIP_PLAYER</code> 模式：固件逻辑位于 <code>src/player</code>、<code>src/assets</code> 和 <code>src/presenter</code>，PC 端生成器位于 <code>tools/clip_packer</code>。
+主路线已经是 self Core，但它不应让设备几个月都没有可用版本。<code>CLIP_PLAYER</code> 作为研发期演示、发布安全网和 REALTIME 故障 fallback：固件逻辑位于 <code>src/player</code>、<code>src/assets</code> 和 <code>src/presenter</code>，PC 端生成器位于 <code>tools/clip_packer</code>。它不替代 self Core 的里程碑，也不用于伪装连续参数能力。
 
 ### 8.1 PC 端素材流水线
 
@@ -616,7 +805,7 @@ BOOT → IDLE ──tap──> REACT ──end──> IDLE
 - clip-only 配置在没有任何 Core/Framework 文件时可构建、启动和播放。
 - 连续切换 LVGL/Cubism 场景及执行组件生命周期 100 次，无任务、buffer 或硬件 client 泄漏。
 
-包含空组件骨架、公共 API、显示租约和测试后，首个组件化预渲染 MVP 预计 **4～7 个工作日**。这仍比“先做完整 Core + Renderer”更适合作为第一交付物。
+S0 骨架已经完成；在显示租约可用的前提下，首个组件化预渲染 MVP 仍可按约 **4～7 个工作日**估算。该估算与 self Core 的 3～6 个月研发预算分开统计。
 
 ---
 
@@ -642,34 +831,46 @@ USB/Wi-Fi 具体收发驱动通过 stream port 注入，组件内部只实现统
 
 | 阶段 | 内容 | 交付物 | Gate |
 |---|---|---|---|
-| S0 组件骨架/基线 | 建立 CMake、Kconfig、公共 API、ports、runtime 空状态机；固定 IDF/工具链 | clip-only 空实现可复现构建 | 无 Core 链接；现有 UI 回归通过 |
-| S1 显示租约/基准 | 完成 LVGL display lease；在组件 target tests 跑 B0～B2 | CSV/日志 + 正式 presenter | 100 次租约循环；预渲染 30 FPS 通过 |
-| S2 CLIP MVP | assets/player/presenter、clip_packer、交互和 Flash fallback | 单组件可演示桌宠 | 第 8.4 节全部通过 |
-| S2b STREAM 可选 | stream port、framing、PTS/CRC、断线 fallback | 主机实时串流 | 延迟、断线恢复和长稳通过 |
-| S3 Core Spike | 官方询问；组件 core backend + core_probe；板端 load/update | Core 对比报告 | 第 6.3 节全部通过 |
-| S4 Renderer Spike | 组件 renderer + PC 参考图 + 板端 B3/B4 | 差分图和帧阶段报告 | 目标档 ≥15 FPS 的预算可成立 |
-| S5 REALTIME 集成 | Framework、Core、renderer、presenter、输入 | 同一公共 API 下的实时模式 | B6 和 30 分钟稳定性通过 |
-| S6 产品化 | 模式切换、异常恢复、包工具、长稳、许可与 CI matrix | 组件发布候选 | 2 小时、许可、三配置回归全通过 |
+| S0 组件骨架/基线 | CMake、Kconfig、公共 API、ports、runtime 状态机；固定 IDF/工具链 | **已完成**的 clip-only 骨架 | 构建通过且无 Core 符号；真机 UI 回归仍待补 |
+| L0 研发治理 | 法务/负责人批准研究方法、模型、GitHub 用途、oracle、Framework 与发布边界 | 签字记录 + reference manifest 模板 | 第 6.6 节 G-LGL |
+| P0 模型/规格 | 冻结字节 5 生产 profile、feature inventory、vector schema、最小 corpus | spec v1 + corpus manifest + hard limits | G-FMT 的输入冻结 |
+| C0 安全解析 | bounded reader、validator、不可变 IR、memory plan、host fuzz | self parser v1 + asset_validator | G-FMT + G-SEC |
+| C1 Core 基础行为 | static model、parameter、key search、interpolation、确定性 update | C0～C3 vectors 全绿 | G-BHV 对应子集 |
+| C2 Core 形变行为 | warp/rotation graph、parts/artmesh/glue/order/flags、生产所需 blend shape | C4～C6 vectors 全绿 | 完整 G-BHV |
+| C3 高级兼容（可选） | v6/offscreen/扩展 blend、更多版本、<code>csm*</code> shim | 独立 feature manifest | 各 feature 单独重复 G-FMT/G-BHV/G-SEC |
+| A0 Animation | SELF_ANIMATION 的目标 motion/expression/pose/physics，或获准 Framework adapter + 所需 shim | 参数轨迹/事件/生命周期回归 | 展开后的 Core 参数与批准向量一致 |
+| D1 显示/降级（可并行） | display lease、B0～B2、CLIP MVP；STREAM 可选 | 可持续演示和 fallback 的设备版本 | 第 8.4 节 |
+| R0 软光栅 | renderer、mask、PC 参考图、板端 B3/B4 | 像素差分 + 帧阶段报告 | 第 6.6 节 G-RND |
+| I0 REALTIME 集成 | animation/self Core/renderer/presenter/input；包签名与异常恢复 | <code>realtime-self-v5</code> 发布候选 | G-TGT + G-RND + G-REL |
 
-粗略工作量：
+以一名熟悉 C/C++、二进制格式、数值图形和嵌入式性能的资深工程师估算：
 
-- 组件骨架 + 预渲染 MVP：4～7 天；
-- 主机串流：在 S2 基础上增加 3～7 天；
-- 纯板端实时：在 S3/S4 均通过后，仍应按 **2～5 周研发**评估，而不是承诺 1～2 周。
+- L0 的内部准备约 1～2 周，但外部法务等待不可估；
+- P0 + C0 约 4～8 人周；
+- C1 + C2 + 目标 animation 子集约 6～14 人周；
+- R0 + I0 约 4～8 人周，可与后半段 Core 工作部分并行；
+- 因此“固定字节 5、固定生产模型、C0～C6 + 单一 animation backend 所需子集”的可发布 REALTIME，按 **12～26 人周（约 3～6 个月）**管理；
+- 字节 1～6 全覆盖、C7、完整兼容 ABI、广泛第三方模型和长期兼容承诺，按 **6～12 个月以上**另立项目；
+- D1 的 CLIP MVP 仍约 4～7 个工作日，STREAM 在此基础上增加约 3～7 天，二者不计入 self Core “完成度”。
+
+这些是范围预算而非交付承诺；任一 Gate 发现规格缺口、目标模型需要 v6、参考输出不可合法使用或 Tab5 性能不足，都要重新估算或缩小 profile。
 
 ### 10.2 组件化验收线
 
 在功能 Gate 之外，<code>otool_cubism_tool</code> 本身还必须满足：
 
-- <code>idf.py build</code> 至少覆盖 clip-only、clip+stream、获准的 realtime 三种配置；
+- <code>idf.py build</code> 至少覆盖 clip-only、clip+stream、realtime-self-v5 三种配置；
 - clip-only 的 map/size 结果不包含 Core、Framework、renderer 符号和相关静态数据；
 - 除 <code>include/otool_cubism_*.h</code> 外没有私有头文件进入公共 include path；
-- 组件目录之外不得直接 include Core/Framework/Purism 头文件或引用其符号；
+- 组件目录之外不得 include self Core 私有头、Framework/第三方 Core 头文件或引用其符号；
+- 发布固件的 link map/SBOM 不得出现官方 Core、PurismCore、Mocari 或其他研究 oracle；
 - 不存在本机绝对路径、configure 阶段下载和未锁定的分支依赖；
-- manifest parser、状态机、frame parser 在 host test 中覆盖截断、越界、重复、乱序、CRC 错和版本不兼容；
+- manifest/moc3/frame parser 与状态机在 host test 中覆盖截断、越界、整数溢出、引用错误、cycle、重复、乱序、CRC/hash/signature 错和版本不兼容；
 - display lease、JPEG/PPA 超时、SD 拔出、串流断开和模型加载失败均能回滚到确定状态；
 - 100 次完整生命周期后任务数、内部 RAM、PSRAM largest block 和硬件 client 数回到允许误差内；
-- <code>README.md</code> 明确每个 Kconfig 的 Flash/RAM/许可影响，并给出最小调用示例。
+- <code>generated/core_feature_manifest.h</code> 可追溯到 spec/vector/corpus hash，不能由手改宏解锁；
+- <code>reference_manifest.yml</code>、SBOM、NOTICE、测试报告和审批记录齐全；
+- <code>README.md</code> 明确每个 Kconfig 的 Flash/RAM/许可影响、实际支持的 moc3 profile 和最小调用示例。
 
 ---
 
@@ -677,32 +878,39 @@ USB/Wi-Fi 具体收发驱动通过 stream port 注入，组件内部只实现统
 
 | 风险 | 影响 | 触发信号 | 缓解与退路 |
 |---|---|---|---|
-| 无官方 RISC-V Core | 阻断官方板端实时路线 | Live2D 明确无法提供 | Purism 限时 Spike；失败转预渲染/串流 |
-| Purism 项目成熟度不足 | 错画、崩溃、升级困难 | PC 数值对照或长稳失败 | 固定版本、全模型回归；失败即停 |
-| 许可/模型授权不明确 | 无法发布 | 无书面结论或业务规模触发授权 | 发布前联系 Live2D 及法律负责人；不做“不侵权”假设 |
+| 研究/发布授权不明确 | 实现或产品无法发布 | G-LGL 无书面结论、条款用途冲突 | G-LGL 前不写格式/行为代码；保留 CLIP/STREAM，必要时联系 Live2D 和法律负责人 |
+| 把参考辅助误称净室 | 证据链失实、增加争议风险 | 实现人员/AI 已接触 SDK 或同类源码 | 文档和 SBOM 如实标记 reference-assisted；若要求严格净室，换隔离仓库/团队重启 |
+| 开源仓库 provenance 不清 | 代码许可证看似宽松但来源有争议 | 反编译链路、无许可证、含专有二进制/模型 | reference manifest 分类；py-moc3 隔离，moc3-reader-re 排除，不 vendor 来源不明代码 |
+| moc3 规格不完整或版本漂移 | 模型加载失败、静默错画 | 新 exporter/字节 6/未知 flag 或 oracle 分歧 | 固定字节 5 生产 profile；未知即拒绝；版本升级重走 G-FMT/G-BHV/G-SEC |
+| GitHub 参考项目过新或互相不一致 | 错误规格被当作真值 | Purism/Mocari/Ayagami 输出分歧 | 不单点信任；独立规格、多个 oracle、quarantine 和人工判定 |
+| parser 越界/整数溢出 | 崩溃、内存破坏甚至安全漏洞 | malformed corpus 触发 sanitizer/超时 | bounded reader、checked math、hard limits、host fuzz；生产只收签名包 |
+| 插值/形变数值漂移 | 动作抖动、错位、遮罩泄漏 | 边界参数或长链误差超过阈值 | 分层中间向量、固定容差、确定性测试；先正确后优化 |
+| 目标模型范围扩张 | 工期失控 | 加入更多版本、v6/offscreen/复杂 blend | feature manifest + asset_validator；新能力单独 Gate/排期 |
+| 自研 Core 长期维护成本 | 新模型/Exporter 发布后不兼容 | 无规格负责人或回归 corpus 失管 | 明确 owner、版本策略和 corpus retention；只承诺白名单 profile |
 | 单组件退化为巨型类 | 修改互相影响、难测试 | facade 包含算法或模块互相反调 | 公共门面只编排；私有模块单向依赖、独立 host test |
-| Kconfig 组合失控 | 固件膨胀或链接错误 backend | clip-only 仍出现 Core 符号 | 条件源文件、三配置 CI、size-components 对比 |
+| Kconfig 组合失控 | 固件膨胀或混入研究 backend | clip-only 出现 Core；发布 map 出现第三方 oracle | NONE/SELF 收敛、条件源文件、三配置 CI、link map/SBOM 检查 |
 | Renderer 特性扩张 | 工期失控 | 目标模型出现 offscreen/扩展 blend | 模型 profile 门禁；重新导出/简化模型 |
 | 纹理内存超限 | 加载失败或碎片 | free/largest block 低于门槛 | 1024²、RGBA4444、按需加载、独占模式 |
 | PSRAM 带宽不够 | 帧率低且双核无收益 | B3/B6 tile worker 扩展性差 | 降档、nearest、减少 overdraw；转预渲染 |
 | LVGL/Cubism 争用 framebuffer | 撕裂、随机花屏甚至内存破坏 | 仅停止 tick 后直接写 DSI buffer | 先实现可等待 in-flight flush 的显示租约；失败则拒绝 start |
 | 当前 IDF 为 beta 且锁文件不一致 | 难复现/显示回归 | 不同机器产物不同 | 固定精确版本；单独验证稳定版迁移 |
-| 任意 moc3 输入 | 安全和稳定性风险 | 支持用户上传模型 | MVP 禁止；只加载签名/CRC 的可信素材包 |
+| 任意 moc3 输入 | 安全和稳定性风险 | 产品提出用户上传模型 | MVP 禁止；以后需独立威胁模型、沙箱/配额、fuzz 覆盖和产品审批 |
 | SD/JPEG 素材故障 | 播放停顿或白屏 | 短读、CRC 错、拔卡 | 有界预读、逐帧 CRC、Flash fallback |
 
 ---
 
 ## 12. 立即可执行的任务清单
 
-1. 记录并统一实际 ESP-IDF 版本；建立 release 性能配置。
-2. 在现有空目录中建立 <code>otool_cubism_tool</code> 的 CMake、Kconfig、公共头文件、ports、runtime 状态机和 clip-only 构建。
-3. 为 <code>otool_lvgl_idf_port</code> 设计并验证 display lease；组件在租约不可用时必须拒绝接管显示。
-4. 把 B0～B2 放入组件 <code>test/target</code>，先测显示、PPA、JPEG、SD、生命周期和内存。
-5. 在组件 <code>tools</code> 下建立 <code>clip_packer</code>，用官方 PC SDK 生成 640×360 的 idle/tap/look 包，完成 CLIP_PLAYER。
-6. 向 Live2D 提交 RISC-V Core 与发布许可咨询。
-7. 在组件 <code>tools</code> 下建立 <code>core_probe</code> 和 <code>asset_validator</code>，先做 PC 对照并冻结目标模型。
-8. 只有 Core Gate 通过后才启用 REALTIME Kconfig 并实现 B3/B4 软光栅 Spike。
-9. 建立 clip-only、clip+stream、realtime CI matrix；任何实时路径故障都回到组件内置 CLIP fallback。
+1. **关闭 G-LGL**：提交一页式法律/来源审查单，明确 reference-assisted 或 strict clean-room、可用 GitHub 仓库、官方 oracle、Framework、模型与发布方式。此项是 Core 编码的前置条件。
+2. 选择唯一生产模型；由 <code>corpus_tool</code> 记录 SHA-256、moc 版本字节、参数/part/deformer/drawable/keyform/mask/offscreen/纹理统计。能重导出时固定为版本字节 5。
+3. 在组件中新建 <code>research/reference_manifest.yml</code>、<code>spec/</code>、<code>spec/test_vector_schema.md</code> 和 <code>test/vectors/</code>；先提交 schema、hard limits、错误码和审批元数据，不提交第三方代码。
+4. 把现有 Kconfig 的 NONE/OFFICIAL/PURISM 占位项改为目标 NONE/SELF；继续保留 REALTIME <code>FATAL_ERROR</code>，直到生成的 feature manifest 通过 Gate。
+5. 在 host 工具中实现 <code>bounded_reader → validator → immutable IR → memory plan</code>，先让截断/溢出/错引用/cycle/fuzz 测试通过，再共享可移植源码到 ESP 组件。
+6. 按 C0～C6 实现 <code>ot_core_*</code>，每完成一层就提交可追溯向量与差分报告；首版不实现 v6/offscreen 和完整 <code>csm*</code> shim。
+7. 并行完成 <code>otool_lvgl_idf_port</code> display lease、B0～B2 和 CLIP_PLAYER，使自研研发期间始终有可演示/fallback 版本。
+8. G-BHV 与 G-SEC 关闭后，才实现 B3/B4 软光栅；G-TGT/G-RND/G-REL 关闭后才解除 <code>realtime-self-v5</code> 构建门禁。
+9. 建立 clip-only、clip+stream、realtime-self-v5 CI matrix，并增加 host sanitizer/fuzz、link map 禁止符号、SBOM/NOTICE、spec/vector/corpus hash 校验。
+10. 只有生产需求明确使用版本字节 6 时，才新建 C7 里程碑并补充 offscreen/扩展 blend 规格、单功能模型，并重新关闭 G-FMT/G-BHV/G-SEC/G-RND。
 
 ---
 
@@ -721,25 +929,33 @@ USB/Wi-Fi 具体收发驱动通过 stream port 注入，组件内部只实现统
 - [ESP32-P4 MIPI-DSI LCD](https://docs.espressif.com/projects/esp-idf/en/stable/esp32p4/api-reference/peripherals/lcd/dsi_lcd.html)
 - [ESP-IDF 版本选择说明](https://docs.espressif.com/projects/esp-idf/en/stable/esp32p4/versions.html)
 
-### 候选与历史参考
+### 兼容实现、格式与安全参考
 
 - [SakuraMotion/PurismCore](https://github.com/SakuraMotion/PurismCore)
 - [Purism Core v1.0.1 固定提交](https://github.com/SakuraMotion/PurismCore/tree/166785bb1d188bcf11c2dbf1b2476dd31f76a24f)
-- [已归档的 moc3-reader-re](https://github.com/QiE2035/moc3-reader-re)
+- [Eatgrapes/Mocari](https://github.com/Eatgrapes/Mocari)
+- [Mocari 0.4.0 API 文档](https://docs.rs/mocari/0.4.0/mocari/)
+- [AyagamiDev/ayagami](https://github.com/AyagamiDev/ayagami)
+- [Ayagami 贡献与黑盒治理规则](https://github.com/AyagamiDev/ayagami/blob/main/CONTRIBUTING.md)
+- [vtubing/moc3](https://github.com/vtubing/moc3)
+- [OpenL2D/moc3ingbird（已归档，含安全 PoC）](https://github.com/OpenL2D/moc3ingbird)
+- [moc3ingbird ImHex pattern（标注未完全验证）](https://github.com/OpenL2D/moc3ingbird/blob/master/src/moc3.hexpat)
+- [Ludentes/py-moc3（隔离参考）](https://github.com/Ludentes/py-moc3)
+- [QiE2035/moc3-reader-re（已归档、排除代码使用）](https://github.com/QiE2035/moc3-reader-re)
 
 ---
 
-> 许可部分只是工程风险提示，不构成法律意见。尤其是第三方 Core 重实现、Framework 分发、官方示例模型和最终商业发布，必须依据届时有效的协议及书面咨询结果处理。
+> 许可部分只是工程风险提示，不构成法律意见。尤其是兼容实现研究、官方 Core 作为 oracle、Framework 分发、官方示例模型/测试输出和最终商业发布，必须依据届时有效的协议、适用法律及书面咨询结果处理。GitHub 仓库状态会变化，工程使用必须以 <code>reference_manifest.yml</code> 固定的 commit、hash 和许可文本为准。
 
 ---
 
 ## 14. 实施记录
 
-> 本表记录对 §12 任务清单的实际执行情况。每一条记录包含：日期、范围、结果、验证方式、遗留事项。
+> 本节保留每次决策发生时的实际结果。2026-08-21 自研 Core 决策之前的任务编号和 backend 名称属于历史记录，不表示当前目标仍采用 OFFICIAL/PURISM。
 
 ### 2026-08-21 — S0 组件骨架/基线
 
-**执行范围**：§12 任务 1（部分）、任务 2；§10.1 S0。
+**执行范围**：路线调整前计划的组件骨架与构建基线；当前 §10.1 S0。
 
 **已交付**：
 
@@ -771,7 +987,50 @@ USB/Wi-Fi 具体收发驱动通过 stream port 注入，组件内部只实现统
 4. 尚无 host test（§10.2 要求的状态机/解析器测试）；S1 建立 `test/host`。
 5. display 端口为占位实现；真实 lease（可等待 in-flight flush 的 acquire/release）待 `otool_lvgl_idf_port` 增加 API 后接入（S1）。
 
-**下一步（S1）**：显示租约（改 `otool_lvgl_idf_port` 子模块）→ B0~B2 基准 → 补 COM3 回归验证。
+**当时记录的下一步（S1）**：显示租约（改 `otool_lvgl_idf_port` 子模块）→ B0~B2 基准 → 补 COM3 回归验证。
+
+### 2026-08-21 — 主路线调整为 self Core（本文档）
+
+- **决策**：REALTIME 主路线由官方/Purism 候选切换为组件内独立 <code>SELF_CORE</code>，GitHub 项目降为有来源记录的研究/oracle 角色。
+- **范围**：采用固定生产模型、版本字节 5 优先、C0～C6 子集优先；v6/offscreen 和完整 <code>csm*</code> ABI 不进入首版。
+- **治理**：当前工作区只能称 reference-assisted；严格 clean-room 必须换隔离仓库和未接触材料的实现团队。
+- **代码状态**：本次只更新可行性文档，未修改组件代码。现有 Kconfig 仍显示 NONE/OFFICIAL/PURISM 占位项，按 §12 任务 4 在 Core 编码前收敛为 NONE/SELF；REALTIME 构建门禁继续生效。
+- **下一步**：先关闭 G-LGL，冻结生产模型和 profile；显示租约/CLIP fallback 可并行推进。
+
+### 2026-08-21 — 自研方向落地：研发治理与规格骨架（§12 任务 1~4）
+
+**执行范围**：§12 任务 1（模板）、2（工具）、3（骨架）、4（Kconfig 收敛）。
+
+**已交付**：
+
+| 项 | 内容 | 位置 |
+|---|---|---|
+| G-LGL 审查单模板 | 一页式法律/来源审查单（reference-assisted / clean-room 二选一、逐来源批准、模型/输出、命名、Framework 复用） | `components/otool_cubism_tool/research/legal_review_sheet.md` |
+| 研究来源清单 | reference_manifest.yml：8 个条目（PurismCore/Mocari/ayagami/vtubing-moc3/moc3ingbird/py-moc3/moc3-reader-re/本地 SDK），含 commit/hash/用途/审批字段，全部 approval_ticket=null | `components/otool_cubism_tool/research/reference_manifest.yml` |
+| spec 骨架 | README（规格生命周期 draft/frozen/superseded）+ hard_limits（模型规模/内存/行为上限草案）+ error_codes（ot_core_error_t 分类 + 错误上下文）+ format（moc3_profile_v5 / package_manifest）+ behavior（C0~C6 契约骨架） | `components/otool_cubism_tool/spec/` |
+| 测试向量 schema | case/输出/比较规则（精确项 + 浮点容差）/case 类别/存储分发规则 | `spec/test_vector_schema.md` |
+| 向量清单 | test/vectors/README + manifest 登记格式（空目录，模型不入库） | `components/otool_cubism_tool/test/vectors/` |
+| corpus_tool | PC 端 Python 工具：SHA-256、moc3 magic/版本字节、model3.json+cdi3.json 统计（纹理/参数/部件/动作/表情） | `tools/corpus_tool/corpus_tool.py` |
+| Kconfig 收敛 | NONE/OFFICIAL/PURISM → **NONE/SELF**；新增 MOC_PROFILE_V5 / ANIMATION_BACKEND_SELF / APPROVED_FRAMEWORK / CSM_COMPAT / V6_OFFSCREEN；REALTIME 门禁加强（必须 SELF + profile + feature manifest 存在） | `components/otool_cubism_tool/Kconfig` |
+| CMake 门禁 | REALTIME 且非 SELF / 无 profile / 无 generated/core_feature_manifest.h / v6 / Framework 无 shim → FATAL_ERROR | `components/otool_cubism_tool/CMakeLists.txt` |
+| README 更新 | 组件 README 改为自研方向 + 新 Kconfig 表 + 治理说明 | `components/otool_cubism_tool/README.md` |
+
+**验证结果**：
+
+- corpus_tool 在本地 SDK 8 个样例上跑通；moc3 版本字节与 §3.2 一致（Haru/Natori/Wanko=1，Hiyori/Mark/Rice=3，Mao=5，Ren=6）；统计参数/部件/纹理/动作数正确（例：Mao=132 参数/33 部件/1 纹理，Ren=73/52/1）；
+- `idf.py build` clip-only 配置**通过**（REALTIME 关闭，新增 Kconfig 默认值生效）；
+- map 文件仍无 Core/Framework 符号；
+- REALTIME 门禁按设计 FATAL_ERROR（未实测开启路径，由 CMake 逻辑保证）。
+
+**遗留事项**：
+
+1. **G-LGL 待用户/法务填写签字**（`research/legal_review_sheet.md`）——Core 格式/行为编码的前置条件。
+2. **生产模型待用户提供**；重导出版本字节 5 后由 corpus_tool 记录统计并冻结 profile。
+3. `reference_manifest.yml` 各条目的 commit/hash 待实际固定。
+4. C0 安全解析器（§12 任务 5）在 G-LGL 关闭后开始；本轮未写任何格式/行为实现代码。
+5. 显示租约/CLIP fallback（§12 任务 7）可并行推进，尚未开始。
+
+**下一步**：等待 G-LGL 结论 + 生产模型；并行可做 D1（display lease + B0~B2 + CLIP_PLAYER）。
 
 ---
 
