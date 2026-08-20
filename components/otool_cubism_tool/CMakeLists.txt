@@ -39,8 +39,14 @@ if(CONFIG_OTOOL_CUBISM_ENABLE_REALTIME)
             "otool_cubism_tool: v6 offscreen is not implemented yet; "
             "the option currently has no effect")
     endif()
-    # Gate 打开后在此追加 core/self 与 renderer 源文件
-    message(STATUS "otool_cubism_tool: REALTIME (SELF) enabled — core sources pending")
+
+    if(CONFIG_OTOOL_CUBISM_CORE_BACKEND_SELF)
+        # self Core（C0 起，逐层追加；全部自研，见 docs/research_log.md）
+        list(APPEND otool_cubism_tool_srcs
+            "src/core/self/moc3_validate.cpp"
+        )
+    endif()
+    message(STATUS "otool_cubism_tool: REALTIME (SELF) enabled")
 endif()
 
 idf_component_register(

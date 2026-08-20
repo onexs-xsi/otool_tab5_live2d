@@ -138,3 +138,54 @@ Section 表（版本化追加，index 即 offset 表下标）：
 2. 交叉验证 Ren.moc3（v6）确认 v6 布局差异（480 offset、CountInfo 39 words、V53 sections）。
 3. 依据本日志编写 `spec/format/moc3_profile_v5.md` 冻结版（G-FMT 输入）。
 4. 设计并实现自研 C0：bounded reader → validator → 不可变 IR → memory plan。
+
+---
+
+## 2026-08-21 — 第二轮：C0 安全解析器实现与验证
+
+### 已交付（全部自研，未复制第三方代码）
+
+| 文件 | 内容 |
+|---|---|
+| `src/core/self/moc3_common.hpp` | 版本常量、CountInfo 版本化 word count（23/32/35/39）、offset 槽位数（160/480）、model_info_t |
+| `src/core/self/moc3_reader.hpp` | 有界读取器：range/对齐检查、checked add/mul、LE/BE 字节序、错误上下文（err_info） |
+| `src/core/self/moc3_validate.hpp/.cpp` | C0 inspect：magic/version/endian/offset 表（对齐+单调）/CountInfo（版本化）/CanvasInfo（NaN 拒绝） |
+| `tools/c0_probe/c0_probe.cpp` | PC host 探针（MSVC 编译，与固件共用同一源码） |
+
+### 验证结果（host 实测）
+
+| 用例 | 结果 |
+|---|---|
+| Mao.moc3（v5，879,680 B） | **OK**；section_count=152、CountInfo 全部与 Python 探测一致、canvas=5800×8400 |
+| Ren.moc3（v6） | **PROFILE_MISMATCH**（v5 profile 门禁正确拒绝 v6）✓ |
+| Haru/Wanko（v1）、Hiyori/Mark/Rice（v3） | **PROFILE_MISMATCH** ✓ |
+| 100 字节截断文件 | **TRUNCATED** + 稳定错误上下文（section=0xFFFF offset=0x2c0）✓ |
+| 坏 magic（XYZ Z） | **BAD_MAGIC** ✓ |
+| endian_flag=1（BE） | **UNSUPPORTED_ENDIAN**（MVP 明确拒绝而非转换）✓ |
+
+### 实现决策记录
+
+1. **section 单调性**：PurismCore 要求"section 之间不重叠"（prev_end 跟踪）；MVP 采用**非零 offset 严格单调**（等价于不重叠，且实现更简单）。
+2. **CountInfo 版本化读取**：按版本读 23/32/35/39 words，未用字段强制清零——规避 PurismCore 固定 39 字段越界读的缺陷（研究日志难点 2）。
+3. **错误上下文**：所有失败路径返回 err_code + section + byte offset + index（spec/error_codes.md 实现）。
+4. **profile 门禁先收紧**：inspect 只接受 v5（G-FMT 冻结前）；v1/v3/v6 一律 PROFILE_MISMATCH，与 spec/hard_limits 一致。
+5. **C0 编译单位**：固件 REALTIME(SELF) 配置编译；clip-only 配置不含 core 源码（CMake 条件源文件）。
+
+### 难点（新增）
+
+9. **host 编译器**：本机无 x86 g++/clang++，MSVC Build Tools 位于
+   `C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools`；vcvarsall 环境
+   需 `cmd /c "call vcvarsall.bat x64 && ..."` 包装才能在 PowerShell 使用。
+10. **C4819 警告**：MSVC 对含中文注释的 UTF-8 源码报警（代码页 936）；不影响构建，
+    后续可统一加 `/utf-8` 或改英文注释。
+11. **powerShell 数组索引赋值**不可用（`$b[0..3]=...` 报错），改写需
+    `[Array]::Copy` + 新数组。
+
+### 下一步
+
+1. C1：静态模型 IR —— section 布局表（研究日志第一轮结论）→ 不可变 typed IR + 全部静态数组校验
+   （UV/indices/mask/parent/texture/constant flags 精确匹配）。
+2. memory plan（`ot_core_query_memory`）：一次分配布局计算。
+3. host 负例 fuzz 语料（截断点/溢出/错引用/cycle）。
+4. 完成 v6（Ren）布局细节记录（480 槽位差异）。
+
