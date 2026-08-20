@@ -9,6 +9,11 @@
 > **项目定位（2026-08-21 修订）**：私有个人项目，**不开源、不上市、不发布**；
 > 允许逆向分析等研究方式；本报告不设法律/合规门禁，只保留工程 Gate。
 >
+> **自研代码铁律（2026-08-21）**：构成组件的**所有代码必须自研**——不允许直接
+> 复制任何第三方代码片段、代码文件、二进制文件或数据文件进入组件；
+> 第三方项目与 SDK 仅作研究参考（阅读、逆向、运行对照、理解行为），
+> 所有实现必须基于自身研究重新编写。
+>
 > 状态：**已完成 <code>components/otool_cubism_tool</code> 的 S0 骨架；技术主路线为组件内自研 moc3/Core 兼容运行时 + CPU 软光栅。自研 Core 尚未实现，REALTIME 仍由构建门禁关闭。**
 
 ---
@@ -27,7 +32,7 @@
 - 先交付安全解析器、不可变模型 IR 和目标模型所需的参数/形变功能，再逐项扩展；
 - 用独立测试向量、模糊测试和 PC 对照程序验证行为，不能以“肉眼看起来相似”代替等价性；
 - 在自研实时链完成前，继续保留 <code>CLIP_PLAYER</code> 作为设备可用版本和运行时故障降级；
-- 研究来源（GitHub 参考项目、本地 SDK、逆向产物）固定 commit/hash 记录于 <code>research/reference_manifest.yml</code>，保证可复现。
+- **全部代码自研**：研究来源（GitHub 参考项目、本地 SDK、逆向产物）固定 commit/hash 记录于 <code>research/reference_manifest.yml</code>，只用于研究参考（阅读/逆向/运行对照），禁止复制其代码与二进制进组件。
 
 ### 1.2 路线选择
 
@@ -46,7 +51,7 @@
 1. 冻结生产模型 profile。若有工程源文件，优先导出为 moc3 版本字节 5，禁用 offscreen、扩展 blend，并固定 drawable/parameter/texture 上限。
 2. 在组件内建立 <code>spec/</code>、<code>research/reference_manifest.yml</code>、<code>test/vectors/</code> 和 PC 端 oracle 协议；先形成可审计规格，不先堆固件代码。
 3. 实现 bounds-checked moc3 parser → 不可变 IR → 独立 runtime arena；解析 Gate 通过后才实现参数绑定、插值、warp/rotation deformer、parts/artmesh。
-4. 先使用组件内部 <code>ot_core_*</code> API。只有 Framework 复用确实需要时，才增加私有 <code>csm*</code> compatibility shim。
+4. 只使用组件内部 <code>ot_core_*</code> API 与自研 animation backend（motion/expression/pose/physics 均为自研实现）；不引入官方 Framework，不实现 <code>csm*</code> shim。
 5. Core 行为 Gate 通过后再连接 CPU 软光栅并跑 Tab5 B3～B6；任何阶段失败都保持 CLIP/STREAM 可用，不把未验证 REALTIME 带入发布构建。
 
 ---
@@ -161,18 +166,23 @@ model3.json / moc3 / motion3 / physics3 / textures
 
 因此不把“Web Core + WASM/JS Runtime”列为可交付路线。
 
-### 3.4 研究与代码来源策略
+### 3.4 研究与代码来源策略（自研代码铁律）
 
-本项目为私有项目（不开源、不上市、不发布），允许逆向分析等研究方式；研究不设审批门禁，但保留工程可复现性要求：
+本项目为私有项目（不开源、不上市、不发布），允许逆向分析等研究方式；研究不设审批门禁。但存在**一条不可逾越的工程规则：组件内所有代码必须自研**。
 
-| 来源类别 | 使用方式 |
-|---|---|
-| 本地 Live2D SDK（third_party/CubismSdk） | 格式逆向的直接对象；官方 Core 作为行为 oracle 对照 |
-| GitHub 参考实现（PurismCore/Mocari/ayagami 等） | 结构参考、算法交叉检查、PC oracle；不直接作为固件 backend |
-| 逆向分析产物 | 允许；作为实现依据时记录来源 |
-| 测试向量/输出 | 允许；固定 hash 便于复现 |
+| 来源类别 | 允许行为 | 禁止行为 |
+|---|---|---|
+| 本地 Live2D SDK（third_party/CubismSdk） | 阅读、逆向分析格式、运行官方 Core 作行为 oracle、用模型做本地研究 | 复制其源码/二进制/模型文件进组件；测试向量不入库 |
+| GitHub 参考实现（PurismCore/Mocari/ayagami 等） | 阅读、运行对照（oracle）、理解结构与算法后**自行编写** | 复制任何代码片段、代码文件、二进制或数据文件 |
+| 逆向分析产物（hexdump、行为观察） | 作为实现依据自行编写 | 把反编译/反汇编产物原文复制进组件 |
+| 测试向量/输出 | 固定 hash 便于复现；可分发的最小自建 fixture | 直接提交受限制的模型/输出文件 |
 
-- 所有研究来源固定 URL / commit / hash 于 <code>research/reference_manifest.yml</code>（工程记录，非合规门禁）。
+执行细则：
+
+- 所有研究来源固定 URL / commit / hash 于 <code>research/reference_manifest.yml</code>，并声明 <code>allowed_use: reference-only</code>。
+- 参考项目的**设计思想**（分层、算法思路、错误处理类别）可借鉴，但实现必须逐行自研；禁止 diff 级复制、机械改写（换名/重排）与第三方代码并入。
+- 禁止把第三方二进制（Core .a、Framework 编译产物、SDK 工具）链接进固件或工具链。
+- 工具（corpus_tool、oracle_runner、asset_validator 等）同样自研；oracle_runner 允许**运行**第三方程序做输出对照，但不调用其库接口。
 - 对外命名仍使用“<code>otool</code> 独立 moc3-compatible runtime”；不得声称它是官方 Cubism Core 或获得 Live2D 背书。
 
 ---
@@ -196,12 +206,13 @@ model3.json / moc3 / motion3 / physics3 / textures
 强制边界：
 
 - 公共头文件不得暴露 <code>csmModel*</code>、Framework 类、PPA client、LVGL 对象或第三方容器类型。
-- self Core、可选 Framework adapter、Renderer 和第三方头文件只能由组件私有源码包含。
+- self Core、Renderer 和第三方头文件只能由组件私有源码包含。
 - 业务代码不得绕过门面调用 Core，也不得直接写 DSI framebuffer。
 - <code>CLIP_PLAYER</code> 必须能在完全不链接 Core/Framework 的配置下独立构建。
 - 即使启用 <code>REALTIME</code>，<code>CLIP_PLAYER</code> 仍作为加载失败、运行超时或模型不兼容时的安全降级。
-- 固件 self Core 首先暴露组件私有 <code>ot_core_*</code> typed API；不为了宣称兼容而过早复制完整 <code>csm*</code> ABI。
-- PurismCore、Mocari 等研究候选不作为发布 Kconfig backend；若做本地比较，只能进入 host tools 或隔离的实验构建。
+- 固件 self Core 首先暴露组件私有 <code>ot_core_*</code> typed API；不复制完整 <code>csm*</code> ABI。
+- **组件不引入官方 Framework 与第三方 Core**：动画（motion/expression/pose/physics）与解析/形变全部自研。
+- PurismCore、Mocari 等研究候选不作为发布 Kconfig backend；只能以 <code>reference-only</code> 方式研究，或进入隔离的 host oracle 对照。
 
 ### 4.2 建议目录结构
 
@@ -226,29 +237,26 @@ components/otool_cubism_tool/
 │   ├── runtime/                      # coordinator、队列、fallback
 │   ├── core/
 │   │   ├── core_api.hpp              # 组件私有 ot_core_* typed API
-│   │   ├── self/
-│   │   │   ├── moc3_reader.cpp       # 只读、bounds-checked reader
-│   │   │   ├── moc3_validate.cpp     # 上限/引用/DAG/溢出验证
-│   │   │   ├── moc3_ir.cpp           # 文件布局 → 不可变 IR
-│   │   │   ├── arena.cpp             # 独立 runtime arena
-│   │   │   ├── parameter.cpp         # clamp/repeat/key search
-│   │   │   ├── interpolate.cpp       # 权重、插值与外推
-│   │   │   ├── deformer_graph.cpp    # 拓扑排序和 cycle 拒绝
-│   │   │   ├── deformer_warp.cpp
-│   │   │   ├── deformer_rotation.cpp
-│   │   │   ├── blendshape.cpp
-│   │   │   ├── part.cpp
-│   │   │   ├── artmesh.cpp
-│   │   │   ├── glue.cpp
-│   │   │   ├── draw_order.cpp
-│   │   │   ├── dynamic_flags.cpp
-│   │   │   ├── update.cpp
-│   │   │   └── offscreen_v6.cpp      # MVP 不编译，单独 Gate
-│   │   └── compat/
-│   │       └── csm_compat.cpp        # 可选、私有、行为稳定后再实现
+│   │   └── self/
+│   │       ├── moc3_reader.cpp       # 只读、bounds-checked reader
+│   │       ├── moc3_validate.cpp     # 上限/引用/DAG/溢出验证
+│   │       ├── moc3_ir.cpp           # 文件布局 → 不可变 IR
+│   │       ├── arena.cpp             # 独立 runtime arena
+│   │       ├── parameter.cpp         # clamp/repeat/key search
+│   │       ├── interpolate.cpp       # 权重、插值与外推
+│   │       ├── deformer_graph.cpp    # 拓扑排序和 cycle 拒绝
+│   │       ├── deformer_warp.cpp
+│   │       ├── deformer_rotation.cpp
+│   │       ├── blendshape.cpp
+│   │       ├── part.cpp
+│   │       ├── artmesh.cpp
+│   │       ├── glue.cpp
+│   │       ├── draw_order.cpp
+│   │       ├── dynamic_flags.cpp
+│   │       ├── update.cpp
+│   │       └── offscreen_v6.cpp      # MVP 不编译，单独 Gate
 │   ├── animation/
-│   │   ├── self/                     # 默认：目标 profile 的 motion/expression/pose/physics
-│   │   └── framework_adapter/        # 可选：Framework + 私有 csm shim
+│   │   └── self/                     # 自研 motion/expression/pose/physics
 │   ├── assets/                       # manifest、CRC、profile、缓存
 │   ├── renderer/                     # tile raster、blend、mask atlas
 │   ├── presenter/                    # JPEG、PPA、DSI、VSYNC
@@ -257,9 +265,6 @@ components/otool_cubism_tool/
 │   ├── input/                        # touch/audio → 统一事件
 │   ├── metrics/                      # P50/P95/P99、堆、丢帧
 │   └── platform/                     # ESP-IDF allocator、clock、task
-├── vendor/
-│   ├── manifest.lock                 # 每个实际依赖的版本、补丁、SHA-256
-│   └── live2d_framework/             # 仅在确需复用时导入
 ├── resources/
 │   └── fallback/                     # 最小 Flash 内置片段
 ├── tools/                            # PC 端，不进入固件
@@ -277,7 +282,7 @@ components/otool_cubism_tool/
     └── target/                       # B0～B6 与故障注入
 ~~~
 
-当前 SDK 位于仓库级 <code>third_party/CubismSdk</code>，Spike 阶段通过明确的 <code>CUBISM_SDK_ROOT</code> CMake cache 变量引用，禁止在组件中写死本机绝对路径。发布版 self Core 不链接官方 Core 或第三方重实现。若动画层确需复用官方 Framework，用受控导入脚本写入 <code>vendor/live2d_framework</code> 与 <code>manifest.lock</code>；否则实现组件自有的目标子集。禁止 configure 阶段联网下载、跟随分支或静默替换版本。
+当前 SDK 位于仓库级 <code>third_party/CubismSdk</code>，Spike 阶段通过明确的 <code>CUBISM_SDK_ROOT</code> CMake cache 变量引用，禁止在组件中写死本机绝对路径。**组件不链接官方 Core、Framework 或任何第三方重实现**（自研代码铁律）。禁止 configure 阶段联网下载、跟随分支或静默替换版本。
 
 ### 4.3 内部模块职责
 
@@ -285,9 +290,7 @@ components/otool_cubism_tool/
 |---|---|---|
 | facade/runtime | 生命周期、状态迁移、错误恢复、模式切换 | 其余内部接口 |
 | core/self | 安全读取目标 moc3、维护 runtime arena、计算 drawable 状态 | spec、assets、platform allocator |
-| core/compat | 可选的私有 <code>csm*</code> shim；不得成为公共 API | core/self |
-| animation/self | 默认 animation backend；目标 profile 的 motion、expression、pose、physics | core/self、assets |
-| animation/framework_adapter | 可选的官方 Framework 封装，不得越过 facade | core/compat、assets、受控 vendor |
+| animation/self | 自研 animation backend；目标 profile 的 motion、expression、pose、physics | core/self、assets |
 | assets | 可信包、manifest/profile/CRC、按需读取 | storage port |
 | renderer | 纹理三角形、blend、mask、tile worker | draw snapshot、assets |
 | presenter | JPEG decode、PPA scale/rotate、VSYNC present | display port、IDF driver |
@@ -386,8 +389,7 @@ main ──> otool_tab5_component
 | <code>CONFIG_OTOOL_CUBISM_ENABLE_REALTIME</code> | 默认关闭，Gate 通过后才允许发布配置开启 |
 | <code>CONFIG_OTOOL_CUBISM_CORE_BACKEND_*</code> | NONE/SELF 二选一；REALTIME 必须为 SELF |
 | <code>CONFIG_OTOOL_CUBISM_MOC_PROFILE_V5</code> | 首版唯一可发布 profile；与包 manifest 双向校验 |
-| <code>CONFIG_OTOOL_CUBISM_ANIMATION_BACKEND_*</code> | SELF/APPROVED_FRAMEWORK 二选一；默认 SELF |
-| <code>CONFIG_OTOOL_CUBISM_ENABLE_CSM_COMPAT</code> | 默认关闭；只在已启用 Framework adapter 时开启 |
+| <code>CONFIG_OTOOL_CUBISM_ANIMATION_BACKEND_SELF</code> | 唯一动画后端（自研）；不存在 Framework 后端 |
 | <code>CONFIG_OTOOL_CUBISM_ENABLE_V6_OFFSCREEN</code> | 默认关闭；独立版本/渲染 Gate 通过后才能开启 |
 | <code>CONFIG_OTOOL_CUBISM_RENDER_SIZE_*</code> | 640×360 / 512×288 / 320×180 三选一 |
 | <code>CONFIG_OTOOL_CUBISM_RASTER_WORKERS</code> | 1 或 2，由 B3/B6 决定 |
@@ -396,8 +398,7 @@ main ──> otool_tab5_component
 <code>CMakeLists.txt</code> 按 Kconfig 追加源文件，而不是把所有 backend 编译后再在运行时选择。配置阶段必须执行以下检查：
 
 - 启用 REALTIME 却未选择 SELF，或 SELF 尚未生成通过 Gate 的 feature manifest：直接 <code>FATAL_ERROR</code>。
-- 固件源码列表发现 official/purism/mocari backend、未知 vendor Core 或未锁定依赖：直接失败。
-- 选择 APPROVED_FRAMEWORK 却缺少固定 manifest，或未开启所需 <code>csm</code> shim：直接失败；SELF 模式不得链接 Framework 符号。
+- 固件源码列表发现 official/purism/mocari backend、未知 vendor Core、第三方代码或未锁定依赖：直接失败。
 - 包声明的 moc 版本/feature 超出编译 profile：在任何大块内存分配前拒绝加载。
 - clip-only 构建不得出现 Core/Framework 未解析符号。
 - host tools、测试模型和官方示例素材不得进入固件镜像。
@@ -577,7 +578,7 @@ ot_core_result_t ot_core_reset_dynamic_flags(ot_core_model_t *model);
 - moc blob 在模型生命周期内只读；文件 offset 永远不改写为指针。
 - IR 与 mutable runtime 分离；renderer 只能读取有代际号和有效期的 snapshot。
 - 相同 blob、初始值和参数序列必须产生确定性输出；错误必须包含稳定 error code、section 和 byte offset。
-- <code>csm*</code> 兼容层只是可选 adapter。先证明 <code>ot_core_*</code> 行为，再按 APPROVED_FRAMEWORK 的实际调用集实现 shim；不以本地头文件的约 55 个符号作为首版完成条件。默认 SELF_ANIMATION 完全不需要该 shim。
+- **不实现 <code>csm*</code> 兼容层**（自研代码铁律：不引入官方 Framework）；动画层与 Core 全部使用组件自有 API。
 
 ### 6.2 安全 parser 与不可变 IR
 
@@ -635,21 +636,21 @@ MVP 的完成面为 C0～C6 中**生产模型实际使用的子集**；没有用
 
 以下结论按 2026-08-21 的仓库状态核验；实现前由 <code>corpus_tool</code> 或维护者重新固定 commit 和 hash。本表是**能力参考**，不是合规门禁。
 
-| 项目 | 已核验能力/限制 | 本项目用途 |
+| 项目 | 已核验能力/限制 | 本项目用途（一律 reference-only） |
 |---|---|---|
-| [SakuraMotion/PurismCore](https://github.com/SakuraMotion/PurismCore) | MIT、C99；项目宣称 Core v5/v6 ABI 与 MOC3 5.3 支持。仓库很新；公开可复现测试远少于 README 所述内部测试，公开 CI 无 ESP/RISC-V 真机 | 模块拆分参考、PC 对照进程、性能比较；不把其输出单独当 ground truth |
-| [Eatgrapes/Mocari](https://github.com/Eatgrapes/Mocari) | MIT、Rust；0.4.0 含 v1～v6 parser、参数/形变/animation 与 backend-neutral render 辅助，测试面较丰富 | PC oracle、算法边界交叉检查、测试向量生成；依赖 std/文件系统，不直接移植到 ESP 固件 |
-| [AyagamiDev/ayagami](https://github.com/AyagamiDev/ayagami) | MIT/Apache-2.0；README 列出至 SDK 5.0 的 loader/driver，API 不稳定且缺 5.3、motion/physics 等 | 参考公开 README 的分层思想与治理规则；其 CONTRIBUTING 禁止 AI 分析/贡献，本项目不向其提交贡献 |
+| [SakuraMotion/PurismCore](https://github.com/SakuraMotion/PurismCore) | MIT、C99；项目宣称 Core v5/v6 ABI 与 MOC3 5.3 支持。仓库很新；公开可复现测试远少于 README 所述内部测试，公开 CI 无 ESP/RISC-V 真机 | 结构/算法研究、PC 对照进程、性能比较；不复制代码，不把其输出单独当 ground truth |
+| [Eatgrapes/Mocari](https://github.com/Eatgrapes/Mocari) | MIT、Rust；0.4.0 含 v1～v6 parser、参数/形变/animation 与 backend-neutral render 辅助，测试面较丰富 | PC oracle、算法边界交叉检查、测试向量生成；不复制代码，不移植到 ESP 固件 |
+| [AyagamiDev/ayagami](https://github.com/AyagamiDev/ayagami) | MIT/Apache-2.0；README 列出至 SDK 5.0 的 loader/driver，API 不稳定且缺 5.3、motion/physics 等 | 参考公开 README 的分层思想；其 CONTRIBUTING 禁止 AI 分析/贡献，本项目不分析其源码、不提交贡献 |
 | [vtubing/moc3](https://github.com/vtubing/moc3) | MIT、Rust parser；README 仅列版本 1～5，提交和测试很少 | PC 端 layout 交叉检查；不是 runtime |
 | [OpenL2D/moc3ingbird](https://github.com/OpenL2D/moc3ingbird) | 已归档、FDPL-1.0-US；ImHex pattern 到版本 5并明确称未完全验证，仓库含 DoS PoC | 安全审计思路、畸形 offset/count 类别、fuzz corpus 设计；PoC 隔离运行，不进设备 |
 | [Ludentes/py-moc3](https://github.com/Ludentes/py-moc3) | MIT、较新、测试少；项目材料表明实现来源含 Java 反编译链路 | 隔离离线交叉检查参考 |
-| [QiE2035/moc3-reader-re](https://github.com/QiE2035/moc3-reader-re) | 已归档、明确描述为 reversing；仅 reader | 逆向参考 |
+| [QiE2035/moc3-reader-re](https://github.com/QiE2035/moc3-reader-re) | 已归档、明确描述为 reversing；仅 reader | 逆向思路参考 |
 
 <code>research/reference_manifest.yml</code> 记录：<code>name</code>、<code>url</code>、<code>commit</code>、<code>retrieved_at</code>、<code>license</code>（信息记录）、来源说明。仓库更新不会自动改变已固定用途。
 
 ### 6.5 Oracle、差分与安全测试
 
-<code>tools/oracle_runner</code> 使用进程隔离的 JSONL/二进制 sidecar 协议，同一 case 分别运行 self Core 和参考实现（官方 Core 可直接作为 oracle，本地 SDK 已有）。Purism/Mocari/Ayagami 等第三方实现互相不构成正确性证明。可靠结论来自“行为规格 + 自有模型预期 + 至少两个独立实现交叉结果 + 人工审查不一致项”。
+<code>tools/oracle_runner</code> 使用进程隔离的 JSONL/二进制 sidecar 协议，同一 case 分别运行 self Core 和参考实现（官方 Core 可直接作为 oracle，本地 SDK 已有；**运行第三方程序做输出对照不属于复制代码**，是允许的研究方式）。Purism/Mocari/Ayagami 等第三方实现互相不构成正确性证明。可靠结论来自“行为规格 + 自有模型预期 + 至少两个独立实现交叉结果 + 人工审查不一致项”。
 
 每个 case 至少包含：
 
@@ -825,7 +826,7 @@ USB/Wi-Fi 具体收发驱动通过 stream port 注入，组件内部只实现统
 | C1 Core 基础行为 | static model、parameter、key search、interpolation、确定性 update | C0～C3 vectors 全绿 | G-BHV 对应子集 |
 | C2 Core 形变行为 | warp/rotation graph、parts/artmesh/glue/order/flags、生产所需 blend shape | C4～C6 vectors 全绿 | 完整 G-BHV |
 | C3 高级兼容（可选） | v6/offscreen/扩展 blend、更多版本、<code>csm*</code> shim | 独立 feature manifest | 各 feature 单独重复 G-FMT/G-BHV/G-SEC |
-| A0 Animation | SELF_ANIMATION 的目标 motion/expression/pose/physics，或获准 Framework adapter + 所需 shim | 参数轨迹/事件/生命周期回归 | 展开后的 Core 参数与批准向量一致 |
+| A0 Animation | SELF_ANIMATION 的目标 motion/expression/pose/physics（全自研） | 参数轨迹/事件/生命周期回归 | 展开后的 Core 参数与批准向量一致 |
 | D1 显示/降级（可并行） | display lease、B0～B2、CLIP MVP；STREAM 可选 | 可持续演示和 fallback 的设备版本 | 第 8.4 节 |
 | R0 软光栅 | renderer、mask、PC 参考图、板端 B3/B4 | 像素差分 + 帧阶段报告 | 第 6.6 节 G-RND |
 | I0 REALTIME 集成 | animation/self Core/renderer/presenter/input；包签名与异常恢复 | <code>realtime-self-v5</code> 发布候选 | G-TGT + G-RND + G-REL |
@@ -851,6 +852,7 @@ USB/Wi-Fi 具体收发驱动通过 stream port 注入，组件内部只实现统
 - 组件目录之外不得 include self Core 私有头、Framework/第三方 Core 头文件或引用其符号；
 - 发布固件的 link map 不得出现官方 Core、PurismCore、Mocari 或其他研究 oracle；
 - 不存在本机绝对路径、configure 阶段下载和未锁定的分支依赖；
+- **代码来源审计**：组件内所有源码/头文件为自研；不包含第三方代码片段（可运行相似性检查或逐文件来源声明）；
 - manifest/moc3/frame parser 与状态机在 host test 中覆盖截断、越界、整数溢出、引用错误、cycle、重复、乱序、CRC/hash/signature 错和版本不兼容；
 - display lease、JPEG/PPA 超时、SD 拔出、串流断开和模型加载失败均能回滚到确定状态；
 - 100 次完整生命周期后任务数、内部 RAM、PSRAM largest block 和硬件 client 数回到允许误差内；
@@ -864,6 +866,7 @@ USB/Wi-Fi 具体收发驱动通过 stream port 注入，组件内部只实现统
 
 | 风险 | 影响 | 触发信号 | 缓解与退路 |
 |---|---|---|---|
+| 无意复制第三方代码/二进制 | 违背自研代码铁律，污染组件 | 代码相似性检查命中、来源声明缺失 | 逐文件来源声明；发现即重写；CI 加相似性/来源检查 |
 | moc3 规格不完整或版本漂移 | 模型加载失败、静默错画 | 新 exporter/字节 6/未知 flag 或 oracle 分歧 | 固定字节 5 生产 profile；未知即拒绝；版本升级重走 G-FMT/G-BHV/G-SEC |
 | GitHub 参考项目过新或互相不一致 | 错误规格被当作真值 | Purism/Mocari/Ayagami 输出分歧 | 不单点信任；独立规格、多个 oracle、quarantine 和人工判定 |
 | parser 越界/整数溢出 | 崩溃、内存破坏甚至安全漏洞 | malformed corpus 触发 sanitizer/超时 | bounded reader、checked math、hard limits、host fuzz；生产只收签名包 |
@@ -885,12 +888,12 @@ USB/Wi-Fi 具体收发驱动通过 stream port 注入，组件内部只实现统
 ## 12. 立即可执行的任务清单
 
 1. 选择唯一生产模型；由 <code>corpus_tool</code> 记录 SHA-256、moc 版本字节、参数/part/deformer/drawable/keyform/mask/offscreen/纹理统计。能重导出时固定为版本字节 5。
-2. 在组件中完善 <code>research/reference_manifest.yml</code>、<code>spec/</code>、<code>spec/test_vector_schema.md</code> 和 <code>test/vectors/</code>；固定各参考项目 commit/hash，提交 schema、hard limits 和错误码。
-3. 在 host 工具中实现 <code>bounded_reader → validator → immutable IR → memory plan</code>，先让截断/溢出/错引用/cycle/fuzz 测试通过，再共享可移植源码到 ESP 组件。
-4. 按 C0～C6 实现 <code>ot_core_*</code>，每完成一层就提交可追溯向量与差分报告；首版不实现 v6/offscreen 和完整 <code>csm*</code> shim。
+2. 在组件中完善 <code>research/reference_manifest.yml</code>、<code>spec/</code>、<code>spec/test_vector_schema.md</code> 和 <code>test/vectors/</code>；固定各参考项目 commit/hash，提交 schema、hard limits 和错误码；**所有来源声明 reference-only**。
+3. 在 host 工具中实现 <code>bounded_reader → validator → immutable IR → memory plan</code>（自研），先让截断/溢出/错引用/cycle/fuzz 测试通过，再共享可移植源码到 ESP 组件。
+4. 按 C0～C6 实现 <code>ot_core_*</code>（自研），每完成一层就提交可追溯向量与差分报告；首版不实现 v6/offscreen，不实现 <code>csm*</code> shim。
 5. 并行完成 <code>otool_lvgl_idf_port</code> display lease、B0～B2 和 CLIP_PLAYER，使自研研发期间始终有可演示/fallback 版本。
 6. G-BHV 与 G-SEC 关闭后，才实现 B3/B4 软光栅；G-TGT/G-RND/G-REL 关闭后才解除 <code>realtime-self-v5</code> 构建门禁。
-7. 建立 clip-only、clip+stream、realtime-self-v5 CI matrix，并增加 host sanitizer/fuzz、link map 禁止符号、spec/vector/corpus hash 校验。
+7. 建立 clip-only、clip+stream、realtime-self-v5 CI matrix，并增加 host sanitizer/fuzz、link map 禁止符号、代码来源/相似性检查、spec/vector/corpus hash 校验。
 8. 只有生产需求明确使用版本字节 6 时，才新建 C7 里程碑并补充 offscreen/扩展 blend 规格、单功能模型，并重新关闭 G-FMT/G-BHV/G-SEC/G-RND。
 
 ---
@@ -1017,5 +1020,22 @@ USB/Wi-Fi 具体收发驱动通过 stream port 注入，组件内部只实现统
 - **报告修订**：§3.4 治理边界 → 研究与代码来源策略；§6.6 Gate 表移除 G-LGL；§10.1 L0 由"研发治理"改为"来源固定"；§11/§12 清理法律风险行与审批元数据要求；§13 移除 EULA 链接。
 - **保留的工程约束**（与合规无关）：固定 commit/hash、无 configure 阶段联网下载、clip-only 不链接 Core/Framework、REALTIME 构建门禁、组件私有 -fno-exceptions/-fno-rtti。
 - **下一步**：冻结生产模型 → C0 安全解析器（现 §12 任务 3）。
+
+### 2026-08-21 — 自研代码铁律（禁止复制第三方代码/二进制）
+
+- **决策（用户要求）**：构成组件的**所有代码必须自研**——不允许直接复制任何
+  第三方代码片段、代码文件、二进制文件或数据文件进入组件；第三方项目与 SDK
+  仅作研究参考（阅读、逆向、运行对照、理解行为），实现一律自行编写。
+- **research/reference_manifest.yml**：新增 `allowed_use: reference-only` 字段与
+  禁止复制规则；8 个来源条目全部声明 reference-only。
+- **Kconfig / CMake**：移除 `APPROVED_FRAMEWORK` 与 `CSM_COMPAT` 配置项及其
+  检查；`ANIMATION_BACKEND_SELF` 成为唯一动画后端（不再存在 Framework 复用路线）。
+- **文档**：§3.4 重写为"自研代码铁律"（允许/禁止行为表 + 执行细则）；
+  目录结构移除 `vendor/`、`framework_adapter/`、`csm_compat/`；§4.6/§6.1/§6.4/
+  §10.1/§10.2/§11/§12 同步更新；§10.2 新增"代码来源审计"验收项；§11 新增
+  "无意复制第三方代码"风险项。
+- **允许的研究方式**：阅读参考实现、运行第三方程序做 oracle 对照（运行对照
+  不等于复制代码）、逆向分析格式、自行编写实现。
+- **下一步**：冻结生产模型 → C0 安全解析器（自研）。
 
 ---

@@ -33,12 +33,6 @@ if(CONFIG_OTOOL_CUBISM_ENABLE_REALTIME)
             "otool_cubism_tool: REALTIME requires CONFIG_OTOOL_CUBISM_MOC_PROFILE_V5 "
             "(only releasable profile for v1)")
     endif()
-    if(CONFIG_OTOOL_CUBISM_ANIMATION_BACKEND_APPROVED_FRAMEWORK AND
-       NOT CONFIG_OTOOL_CUBISM_ENABLE_CSM_COMPAT)
-        message(FATAL_ERROR
-            "otool_cubism_tool: APPROVED_FRAMEWORK requires "
-            "CONFIG_OTOOL_CUBISM_ENABLE_CSM_COMPAT")
-    endif()
     if(CONFIG_OTOOL_CUBISM_ENABLE_V6_OFFSCREEN)
         message(FATAL_ERROR
             "otool_cubism_tool: v6 offscreen is a separate gated milestone; "
@@ -52,15 +46,6 @@ if(CONFIG_OTOOL_CUBISM_ENABLE_REALTIME)
     endif()
     # Gate 打开后在此追加 core/self 与 renderer 源文件
     message(STATUS "otool_cubism_tool: REALTIME (SELF) sources pending")
-else()
-    if(CONFIG_OTOOL_CUBISM_ANIMATION_BACKEND_APPROVED_FRAMEWORK)
-        message(FATAL_ERROR
-            "otool_cubism_tool: APPROVED_FRAMEWORK requires REALTIME")
-    endif()
-    if(CONFIG_OTOOL_CUBISM_ENABLE_CSM_COMPAT)
-        message(FATAL_ERROR
-            "otool_cubism_tool: CSM_COMPAT requires REALTIME")
-    endif()
 endif()
 
 idf_component_register(

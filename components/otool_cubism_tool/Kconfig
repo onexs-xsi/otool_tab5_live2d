@@ -45,26 +45,12 @@ menu "otool_cubism_tool"
             before any large allocation.
 
     config OTOOL_CUBISM_ANIMATION_BACKEND_SELF
-        bool "Animation backend: SELF (in-component)"
+        bool "Animation backend: SELF (in-component, self-authored)"
         default y
         help
-            Default animation backend implemented inside the component.
-            SELF mode must not link Framework symbols.
-
-    config OTOOL_CUBISM_ANIMATION_BACKEND_APPROVED_FRAMEWORK
-        bool "Animation backend: approved Live2D Framework"
-        default n
-        help
-            Only after license approval and a controlled import into
-            vendor/live2d_framework with manifest.lock; also requires
-            CONFIG_OTOOL_CUBISM_ENABLE_CSM_COMPAT.
-
-    config OTOOL_CUBISM_ENABLE_CSM_COMPAT
-        bool "Enable private csm* compatibility shim"
-        default n
-        help
-            Private adapter for an approved Framework adapter. Never part of
-            the public API.
+            Only animation backend. Motion/expression/pose/physics are all
+            self-authored implementations (self-authored-code rule: no third
+            party code or binaries may enter the component).
 
     config OTOOL_CUBISM_ENABLE_V6_OFFSCREEN
         bool "Enable moc3 v6 offscreen / extended blend (5.3+)"

@@ -6,6 +6,9 @@ ESP-IDF 组件。`main` 只负责创建板级对象、注入端口并选择运�
 > **主路线（2026-08-21 调整）**：组件内**自研 moc3/Core 兼容运行时**
 > （`SELF_CORE`，可行性报告路线 E）+ CPU 软光栅。官方 Core 与第三方
 > 重实现仅作为有来源记录的研究/oracle 角色。
+> **自研代码铁律**：组件内所有代码必须自研——禁止复制任何第三方代码片段、
+> 代码文件、二进制或数据文件；第三方项目与 SDK 仅作研究参考（阅读/逆向/
+> 运行对照），实现必须自行编写。
 > 实现状态：S0 骨架 + 研发治理骨架（`research/`、`spec/`、`test/vectors/`）。
 
 ## 运行模式
@@ -25,9 +28,7 @@ ESP-IDF 组件。`main` 只负责创建板级对象、注入端口并选择运�
 | `CONFIG_OTOOL_CUBISM_ENABLE_REALTIME` | n | 板端实时；开启即 FATAL（未实现） |
 | `CONFIG_OTOOL_CUBISM_CORE_BACKEND_*` | NONE | NONE / **SELF**；REALTIME 必须 SELF |
 | `CONFIG_OTOOL_CUBISM_MOC_PROFILE_V5` | y | 首版唯一可发布 moc3 profile（版本字节 5） |
-| `CONFIG_OTOOL_CUBISM_ANIMATION_BACKEND_SELF` | y | 动画后端：组件自研（默认） |
-| `CONFIG_OTOOL_CUBISM_ANIMATION_BACKEND_APPROVED_FRAMEWORK` | n | Framework 复用（需固定 manifest + csm shim） |
-| `CONFIG_OTOOL_CUBISM_ENABLE_CSM_COMPAT` | n | 私有 `csm*` shim（仅 Framework adapter 用） |
+| `CONFIG_OTOOL_CUBISM_ANIMATION_BACKEND_SELF` | y | 动画后端：自研（唯一选项；不引入官方 Framework） |
 | `CONFIG_OTOOL_CUBISM_ENABLE_V6_OFFSCREEN` | n | 5.3 离屏/扩展 blend（独立 Gate） |
 | `CONFIG_OTOOL_CUBISM_RENDER_SIZE_*` | 640×360 | 实时渲染分辨率档位 |
 | `CONFIG_OTOOL_CUBISM_RASTER_WORKERS` | 1 | 光栅 worker 数（B3/B6 决定） |
@@ -70,7 +71,10 @@ s_tool.deinit();
 ## 项目定位与代码来源
 
 - 私有个人项目：不开源、不上市、不发布；允许逆向分析等研究方式。
-- 研究来源按 `research/reference_manifest.yml` 固定 commit/hash（工程可复现，
-  不是合规门禁）；对外仍命名为 "otool 独立 moc3-compatible runtime"。
+- **自研代码铁律**：组件内所有代码（固件 + 工具）必须自研；禁止复制任何
+  第三方代码片段、代码文件、二进制或数据文件。研究来源按
+  `research/reference_manifest.yml` 固定 commit/hash 并声明 reference-only。
+- 对外命名 "otool 独立 moc3-compatible runtime"；不引入官方 Framework，
+  不实现 `csm*` shim。
 - 完整工程 Gate 体系（G-FMT/G-BHV/G-SEC/G-TGT/G-RND/G-REL）见
   `docs/live2d_feasibility.md` §6.6。
