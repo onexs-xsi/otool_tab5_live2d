@@ -6,6 +6,9 @@
 #include "otool_lvgl_port.h"
 #include "lvgl.h"
 
+#include "otool_cubism_tool.h"
+#include "otool_cubism_port.h"
+
 #include "esp_log.h"
 #include "nvs_flash.h"
 
@@ -14,6 +17,78 @@
 static const char *TAG = "main";
 
 static m5::tab5::otool_tab5_component g_comp;
+
+/* ------------------------------------------------------------------ */
+/* otool_cubism_tool 最小生命周期演示（S0）                              */
+/*                                                                     */
+/* S1 尚未提供真实 display lease，因此这里使用占位端口：acquire 明确失败，  */
+/* 组件必须拒绝接管显示（可行性报告 §12-3）。                              */
+/* ------------------------------------------------------------------ */
+
+static esp_err_t stub_display_acquire(void *ctx)
+{
+    (void)ctx;
+    return ESP_ERR_NOT_SUPPORTED; /* S1 实现真实租约前，显示不可接管 */
+}
+
+static esp_err_t stub_display_release(void *ctx)
+{
+    (void)ctx;
+    return ESP_OK;
+}
+
+static esp_err_t stub_display_get_info(void *ctx, otool_cubism_display_info_t *out)
+{
+    (void)ctx;
+    if (out == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    out->phys_width      = 720;
+    out->phys_height     = 1280;
+    out->logical_width   = 1280;
+    out->logical_height  = 720;
+    out->bytes_per_pixel = 2;
+    return ESP_OK;
+}
+
+static const otool_cubism_display_port_t s_stub_display_port = {
+    .ctx = nullptr,
+    .acquire = stub_display_acquire,
+    .release = stub_display_release,
+    .present = nullptr,
+    .get_info = stub_display_get_info,
+};
+
+static void demo_cubism_lifecycle(void)
+{
+    static otool::cubism::otool_cubism_tool tool;
+
+    otool_cubism_config_t cfg = {};
+    cfg.display = &s_stub_display_port;
+    cfg.storage = nullptr; /* S2 接入素材端口 */
+
+    esp_err_t err = tool.init(cfg);
+    ESP_LOGI(TAG, "cubism init -> %s", esp_err_to_name(err));
+    if (err != ESP_OK) {
+        return;
+    }
+
+    otool_cubism_status_t st = {};
+    tool.get_status(&st);
+    ESP_LOGI(TAG, "cubism state=%d package_version=%lu",
+             (int)st.state, (unsigned long)st.package_version);
+
+    /* 无 storage 端口 → 明确失败，不静默降级 */
+    err = tool.load_package("/sdcard/live2d/manifest.bin");
+    ESP_LOGI(TAG, "cubism load_package (no storage) -> %s", esp_err_to_name(err));
+
+    /* start 需要 LOADED + 显示租约；租约不可用 → 拒绝接管显示 */
+    err = tool.start(OTOOL_CUBISM_MODE_CLIP_PLAYER);
+    ESP_LOGI(TAG, "cubism start (lease unavailable) -> %s", esp_err_to_name(err));
+
+    err = tool.deinit();
+    ESP_LOGI(TAG, "cubism deinit -> %s", esp_err_to_name(err));
+}
 
 extern "C" void app_main(void)
 {
@@ -81,4 +156,6 @@ extern "C" void app_main(void)
     otool_lvgl_port_unlock();
 
     ESP_LOGI(TAG, "UI ready");
+
+    demo_cubism_lifecycle();
 }

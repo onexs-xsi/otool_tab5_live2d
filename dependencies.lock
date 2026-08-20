@@ -56,6 +56,6 @@ direct_dependencies:
 - idf
 - lvgl/lvgl
 - otool_lvgl_idf_port
-manifest_hash: 24af676039e6a58793a1fc4677f3914131fdc16f628c2868c0880685446fe3db
+manifest_hash: db22da8433f4489c29c0a187b18279e9739c7983cd1b5869ddcae2c04a08527d
 target: esp32p4
 version: 3.0.0

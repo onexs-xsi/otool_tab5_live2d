@@ -1,0 +1,13 @@
+# Release 性能配置（可行性报告 §7.1）
+#
+# 用法：
+#   idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.release" build
+#
+# 与 sdkconfig.defaults 叠加使用；正式基准必须用此配置，
+# 并记录固件 SHA / 芯片 revision / CPU / PSRAM 频率 / 温度。
+
+# 应用编译优化：PERF（默认构建为 DEBUG / -Og，不能用于推断渲染性能）
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# 日志级别（基准时减少串口开销干扰）
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

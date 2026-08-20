@@ -5,6 +5,7 @@ idf_component_register(
         otool_dev_autodetect
         otool_tab5_component
         otool_lvgl_idf_port
+        otool_cubism_tool
         lvgl__lvgl
         nvs_flash
 )

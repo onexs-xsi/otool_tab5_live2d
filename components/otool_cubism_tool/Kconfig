@@ -1,0 +1,69 @@
+menu "otool_cubism_tool"
+
+    config OTOOL_CUBISM_ENABLE_CLIP_PLAYER
+        bool "Enable clip player mode (route D)"
+        default y
+        help
+            Pre-rendered clip playback with interaction state machine.
+            This is the default and most reliable on-device mode
+            (feasibility report §8).
+
+    config OTOOL_CUBISM_ENABLE_STREAM_CLIENT
+        bool "Enable stream client mode (route C)"
+        default n
+        help
+            Host-rendered JPEG frame streaming (implementation pending S2b).
+
+    config OTOOL_CUBISM_ENABLE_REALTIME
+        bool "Enable realtime mode (routes A/B)"
+        default n
+        help
+            On-device realtime rendering. NOT IMPLEMENTED YET: enabling this
+            fails the build until the Core Gate (§6.3) passes and S3-S5 land.
+
+    choice OTOOL_CUBISM_CORE_BACKEND
+        prompt "Core backend"
+        default OTOOL_CUBISM_CORE_BACKEND_NONE
+        help
+            Backend for the realtime mode. REALTIME forbids NONE.
+
+        config OTOOL_CUBISM_CORE_BACKEND_NONE
+            bool "None (clip/stream only)"
+
+        config OTOOL_CUBISM_CORE_BACKEND_OFFICIAL
+            bool "Official Cubism Core (RISC-V build, after license confirmation)"
+
+        config OTOOL_CUBISM_CORE_BACKEND_PURISM
+            bool "PurismCore (Spike/Gate only)"
+    endchoice
+
+    choice OTOOL_CUBISM_RENDER_SIZE
+        prompt "Realtime render size"
+        default OTOOL_CUBISM_RENDER_SIZE_640X360
+        help
+            Scene buffer resolution; PPA scales it to the physical panel.
+
+        config OTOOL_CUBISM_RENDER_SIZE_640X360
+            bool "640x360 (2x upscale)"
+
+        config OTOOL_CUBISM_RENDER_SIZE_512X288
+            bool "512x288 (2.5x upscale)"
+
+        config OTOOL_CUBISM_RENDER_SIZE_320X180
+            bool "320x180 (4x upscale)"
+    endchoice
+
+    config OTOOL_CUBISM_RASTER_WORKERS
+        int "Raster worker count"
+        range 1 2
+        default 1
+        help
+            Tile raster workers for the realtime renderer; decided by B3/B6.
+
+    config OTOOL_CUBISM_METRICS
+        bool "Collect runtime metrics"
+        default y
+        help
+            Heap/frame metrics. Publish builds may keep the low-cost counters.
+
+endmenu

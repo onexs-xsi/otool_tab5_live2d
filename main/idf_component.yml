@@ -1,5 +1,7 @@
 ## IDF Component Manager Manifest File
 dependencies:
   ## Required IDF version
+  ## 固定为 v6.1-beta1（组件管理器将其规范化为 6.1.0-beta1，
+  ## dependencies.lock 中显示为 6.1.0 属正常规范化行为）
   idf:
-    version: '>=5.4'
+    version: '>=6.1.0-beta1,<6.2.0'
