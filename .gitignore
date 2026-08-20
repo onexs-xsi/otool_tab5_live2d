@@ -66,6 +66,9 @@ env/
 .ccls-cache/
 compile_commands.json
 
+# Third-party SDKs (Live2D Cubism SDK — licensed binaries, not for the repo)
+third_party/
+
 # Windows specific
 Thumbs.db
 ehthumbs.db

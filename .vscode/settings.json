@@ -4,7 +4,7 @@
   "idf.openOcdConfigs": [
     "board/esp32p4-builtin.cfg"
   ],
-  "idf.portWin": "detect",
+  "idf.portWin": "COM3",
   "idf.currentSetup": "C:\\Espressif\\frameworks\\esp-idf-v6.1-beta1",
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32p4"
@@ -14,5 +14,6 @@
     "--background-index",
     "--query-driver=**",
     "--compile-commands-dir=d:\\work\\otool_tab5_live2d\\build"
-  ]
+  ],
+  "idf.flashType": "UART"
 }
