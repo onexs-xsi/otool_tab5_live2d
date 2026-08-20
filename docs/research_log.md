@@ -1,0 +1,140 @@
+# 研究日志（research log）— moc3/Core 自研
+
+> 本文件记录自研 moc3/Core 兼容运行时的研究进度、难点与决策。
+> 材料与工具位于临时目录 `%TEMP%/otool_cubism_research/`（不进仓库）；
+> 本文档在仓库内，供实现与审计参考。
+
+---
+
+## 2026-08-21 — 第一轮：材料准备 + MOC3 格式逆向（头部/offset 表/CountInfo/Section 布局）
+
+### 材料准备
+
+拉取到 `%TEMP%/otool_cubism_research/`：
+
+| 材料 | commit | 用途 |
+|---|---|---|
+| PurismCore (SakuraMotion) | `166785bb` | 结构/校验逻辑研究（C） |
+| Mocari (Eatgrapes) | HEAD（depth-1） | 交叉验证（Rust parser） |
+| vtubing/moc3 | HEAD | 待用（layout 交叉检查） |
+| moc3ingbird (OpenL2D) | HEAD | 待用（fuzz 类别参考） |
+| 本地 SDK Mao.moc3（v5） | — | 实证对象（879,680 B） |
+
+### 已确认的 MOC3 文件布局（多源交叉验证：PurismCore + Mocari + 实证）
+
+```
+文件头（64 字节）：
+  [0..4)  magic = "MOC3"
+  [4]     version u8          （1..6；v5 = 5.0.00~5.2.03 导出）
+  [5]     endian_flag u8      （0 = little-endian；1 = big-endian）
+  [6..64) 保留（全 0）
+offset 表：
+  [64..64+160*4)  160 个 u32（v1~v5）；v6 为 480 个 u32
+  offsets[0] = CountInfo 区；offsets[1] = CanvasInfo 区；offsets[2..] = 各 section
+  要求：全部 8 字节对齐；值 ≤ 文件大小；非零 offset 单调递增（PurismCore 还要求
+  section 之间不重叠，即每个 section 的 end ≤ 下一 section 的 offset）
+CountInfo（版本化长度！）：
+  v1~v3 = 23 个 i32（140→92 B）
+  v4    = 32 个 i32
+  v5    = 35 个 i32（= 140 B）
+  v6    = 39 个 i32（含 offscreens/offscreen_kf/bs_offscreens + reserved）
+  字段顺序（v5 的 35 个）：
+  parts, deformers, warps, rotations, art_meshes, parameters,
+  part_kf, warp_kf, rotation_kf, art_mesh_kf, kf_pos,
+  axis_indices, bindings, axes, keys, uvs, indices, masks,
+  draw_groups, draw_items, glues, glue_info, glue_kf,
+  kf_mul_colors, kf_scr_colors,
+  blend_axes, blend_bindings, bs_warps, bs_art_meshes,
+  bs_constraint_idx, bs_constraints, bs_constraint_vals,
+  bs_parts, bs_rotations, bs_glues
+CanvasInfo（offsets[1]）：
+  pix_per_unit f32, origin_x f32, origin_y f32, width f32, height f32, flag u8
+  flag 位 0 = Y 反转标志（Y_REVERSED）
+Section 表（版本化追加，index 即 offset 表下标）：
+  V30 基础 101 个：count_info, canvas_info, part(id_runtime 槽,id,binding,keyform,visible,enable,parent),
+    deformer(id_runtime 槽,id,binding,visible,enable,parent_part,parent_deformer,type,local_idx),
+    warp(binding,keyform_off,key_count,vertex_count,row,column),
+    rotation(binding,keyform_off,key_count,base_angle),
+    art_mesh(id_runtime×4 槽,id,binding,keyform_off,key_count,visible,enable,parent_part,parent_deformer,
+             texture_no,drawable_flag,vertex_count,uv_begin,indices_begin,indices_count,mask_begin,mask_count),
+    param(id_runtime 槽,id,max,min,default,repeat,decimal_places,axis_begin,axis_count),
+    part_key(draw_order), warp_key(opacity,key_pos_offset),
+    rotation_key(opacity,angle,origin_x,origin_y,scale,reflect_x,reflect_y),
+    art_mesh_key(opacity,draw_order,key_pos_offset),
+    key_pos(xy), axis_idx(index), binding(axis_idx_begin,axis_idx_count), axis(keys_begin,keys_count),
+    keys(key), uv(xy), indices(u16), mask(art_mesh_idx),
+    draw_group(obj_begin,obj_count,obj_total_count,max_order,min_order),
+    draw_group_obj(type,index,self_group_idx),
+    glue(id_runtime 槽,id,binding,keyform_off,key_count,art_mesh_a,art_mesh_b,info_begin,info_count),
+    glue_info(weight,position_idx u16), glue_key(intensity)
+  V33 +1：warp quad_transform
+  V42 +35：param keys_begin/count, warp/rotation/art_mesh key_color_offset, kf_mul/scr_color(r,g,b),
+    param type/blend_axis_begin/blend_axis_count, blend_axis(keys_begin,keys_count,base_key_idx),
+    blend_binding(axis_idx,key_bs_begin,key_bs_count,bs_constraint_idx_begin,bs_constraint_idx_count),
+    bs_warp(target,binding_begin,binding_count), bs_art_mesh(同), bs_constraint_idx, bs_constraint,
+    bs_constraint_val(key,weight)
+  V50 +12：warp/rotation/art_mesh_key 各 +key_mul/scr_color_offset, bs_part/bs_rotation/bs_glue(target,b,b,c)
+  V53 +15（v6）：part offscreen_idx, art_mesh blend_mode, offscreen(8 字段), part_key key_idx,
+    offscreen_key(opacity,kmco,ksco), bs_offscreen(3)
+  v5 实际使用 = 101+1+35+12 = 149 个槽位（Mao 实测 152 非零，见难点 2）
+```
+
+### Mao.moc3 实证结果（v5）
+
+- `magic=MOC3 version=5 endian_flag=0`，160 个 offset 全部 8 字节对齐、范围合法、非零者单调递增 ✓
+- CountInfo：parts=32, deformers=178 (=warps 118+rotations 60 ✓), art_meshes=262, parameters=132,
+  part_kf=34, warp_kf=625, rotation_kf=248, art_mesh_kf=1359, kf_pos=143920, uvs=12040,
+  indices=23829, masks=65, draw_groups=2, draw_items=263, glues=7, glue_info=322, glue_kf=7,
+  kf_mul_colors=2232, kf_scr_colors=2232, blend_axes=33, blend_bindings=124, bs_warps=3,
+  bs_art_meshes=31, bs_constraint_idx=234, bs_constraints=7, bs_constraint_vals=14,
+  bs_parts=1, bs_rotations=3, bs_glues=0, offscreens=0
+- CanvasInfo：pix_per_unit=5800, origin=(2900,4200), size=5800×8400, flag=0
+- Section 抽查：part_id[0]="PartCore"、deformer_id[0]="Rotation29"、deformer_type[0]=1(rotation)、
+  warp row=col=5 → vertex=36=(5+1)² ✓、art_mesh[0] vertex=62 uv_begin=0 indices_begin=0
+  indices_count=273、param_id[0]="ParamAngleX" max=30 min=-30 default=0、keys=[-30,0,30,...]、
+  rotation_key origin≈±0.042/scale≈0.000172（相对单位）、draw_group[0] obj 0..255、mask 65 个
+
+### 难点记录
+
+1. **id_runtime 指针槽位**（★ 已踩坑）：part/deformer/art_mesh/param/glue 的 id 之前、
+   art_mesh 的 uv/indices/mask 之前，各有一个 `id_runtime` 等**指针占位槽**（8 字节 × count，
+   文件里全 0，运行时由 Core 填充）。初版探测脚本漏掉这些槽位导致全部 section 错位，
+   part_id 读出空串。**解析器必须把这些槽位当作保留槽跳过**（8 字节对齐仍满足）。
+   注意：这是 64 位导出布局；若导出器为 32 位，槽宽可能为 4——需按导出器位数验证（本地产出为 8）。
+2. **CountInfo 长度版本化**：23/32/35/39 words 随版本增长。PurismCore 用固定 39 字段结构读取
+   所有版本（v5 时后 4 个字段越界读到相邻数据，恰好为 0 未触发校验——**实现缺陷**，不能模仿）；
+   Mocari 只解析前 25 个字段（跳过 blend shape 字段）。**自研实现按版本读取正确 word count，
+   未知长度拒绝**。
+3. **deformer type 枚举**：0=WARP, 1=ROTATION（PurismCore deformer.h 确认）。
+4. **endian_flag 语义**：0 = 文件为 LE（本机 LE 时无需转换）；1 = BE。读取所有多字节字段
+   前必须按此转换；仅支持 LE 时遇到 flag=1 直接拒绝（MVP 白名单）。
+5. **Mao 画布 5800×8400 非 16:9**（≈1:1.448 竖版）：640×360 目标渲染需要 letterbox 或裁剪策略
+   ——模型 profile 冻结时必须确认生产模型画布比例与渲染目标的关系。
+6. **PurismCore 的 psm__verify_count_info 只校验部分字段**（parts..glue_kf 等 23 个 +
+   warps+rotations==deformers）：自研 validator 必须全字段校验（负值、超出 hard limits、
+   warps+rotations==deformers、monotonic、不重叠、对齐）。
+7. **V50 keyform 颜色区数据模式异常**（★ 待 oracle 对照）：
+   - `warp_key.key_mul_color_offset` 读出 [1065353216, 0, 1065353216, 0, ...]（= f32 1.0/0.0 交替），
+     而同类的 `art_mesh_key.key_mul_color_offset` = [0,1,2,3,...] 递增整数；
+   - `kf_mul_color_r` 前几值为递增小整数（≈0x33D、0x33E…，f32 读法 ≈1.16e-42）；
+   - 可能为 v5 的颜色量化/打包格式（RGBA8 或标志位编码）。C0 parser 按 u32/f32 原样读取，
+     语义解释留到 C2/C5 层并用官方 Core oracle 对照确认。
+8. **count=0 的 section 的 offset 语义**：可为 0（未使用）或指向任意合法位置（Mao bs_glue
+   count=0 时最后两个槽位 offset 相同 0xd6c40）；validator 对 count=0 不应要求 offset 唯一。
+
+### Ren.moc3（v6）初步实证
+
+- `magic=MOC3 version=6`，**480 个 offset**（v6 布局），非零 167 个，全部对齐/范围内/单调 ✓
+- CountInfo：parts=51, deformers=150 (=warps 128+rotations 22 ✓), art_meshes=198,
+  parameters=73, part_kf=54, warp_kf=848, rotation_kf=97, art_mesh_kf=834, kf_pos=154688,
+  axis_indices=103, bindings=76, axes=65, keys=422, uvs=15686, indices=33123, ...（截断，后续补全）
+- v6 的 V53 sections（offscreen 等 15 个）与 480 槽位机制待细化（167 非零 vs v5 149+15=164 的
+  差值 3 待解释）
+- v6 不进入首版（MVP profile = v5），但 parser 必须**识别并拒绝** v6（报告 §6.2）
+
+### 下一步
+
+1. 完成 Mao 剩余 section（86~151）验证与 glue/blend shape 字段语义确认。
+2. 交叉验证 Ren.moc3（v6）确认 v6 布局差异（480 offset、CountInfo 39 words、V53 sections）。
+3. 依据本日志编写 `spec/format/moc3_profile_v5.md` 冻结版（G-FMT 输入）。
+4. 设计并实现自研 C0：bounded reader → validator → 不可变 IR → memory plan。
