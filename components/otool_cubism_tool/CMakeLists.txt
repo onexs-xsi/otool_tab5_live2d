@@ -44,6 +44,7 @@ if(CONFIG_OTOOL_CUBISM_ENABLE_REALTIME)
         # self Core（C0 起，逐层追加；全部自研，见 docs/research_log.md）
         list(APPEND otool_cubism_tool_srcs
             "src/core/self/moc3_validate.cpp"
+            "src/core/self/moc3_ir.cpp"
         )
     endif()
     message(STATUS "otool_cubism_tool: REALTIME (SELF) enabled")

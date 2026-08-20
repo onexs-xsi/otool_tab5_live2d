@@ -189,3 +189,36 @@ Section 表（版本化追加，index 即 offset 表下标）：
 3. host 负例 fuzz 语料（截断点/溢出/错引用/cycle）。
 4. 完成 v6（Ren）布局细节记录（480 槽位差异）。
 
+---
+
+## 2026-08-21 — 第三轮：C1 不可变 IR + 显示链路方案
+
+### C1 交付（自研）
+
+| 文件 | 内容 |
+|---|---|
+| `src/core/self/moc3_ir.hpp/.cpp` | 152 项 section 规格表（V30 101 + V33 1 + V42 35 + V50 15）+ typed 视图解析 + 全量静态引用校验（part/deformer/art_mesh 父链、binding/axis/keys、keyform 组合 2^axis、warp 网格、UV/indices/mask、glue、draw group、blend shape） |
+| `tools/c0_probe` 扩展 | 增加 IR 构建与抽查输出 |
+
+**host 验证（Mao.moc3）**：`ir build -> OK`，slots=152；art_mesh[0] vc=62/uv_begin=0/idx 273/kf 0/1；
+uv[0..3]、indices[0..5]、param[0]（max30/min-30/default0）、kf_pos[0..3] 与 Python 探测**逐值一致**。
+
+### 难点（新增）
+
+12. **V42 规格表错位**：`param_ext.key_runtime`（指针槽）最初漏掉，导致 102 之后全部错位 1
+    （V50 实际从 137 起 15 项）。修正后 static_assert(152) 通过。教训：**每个版本的 section
+    规格必须与 CountInfo 版本化机制一致核对**（V42 字段在 v4.2 才存在）。
+13. **初步显示路径决策**：不先做 display lease（需改 otool_lvgl_idf_port 子模块），
+    改为 **cubism 渲染 640×360 → LVGL image（2x 缩放）显示**——先验证渲染正确性，
+    独占租约后置为优化项。
+14. **纹理路径**：设备端不解析 PNG；PC 端 texture_packer（Pillow）转换
+    PNG → 预乘 alpha RGBA4444 raw（1024² = 2 MiB），设备直接加载。
+
+### 下一步
+
+1. 渲染器最小实现：三角形光栅 + RGBA4444 纹理采样（nearest）+ alpha 混合。
+2. 最小 update：参数默认值 → keyform 选择 → art_mesh 顶点（kf_pos）→ 渲染。
+3. LVGL image 集成（main）：640×360 帧缓冲 → 2x 上屏。
+4. 纹理与 moc3 素材进 SD/flash 的加载路径。
+
+
