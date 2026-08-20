@@ -1,4 +1,4 @@
-// otool_tab5_live2d 最小演示：白色屏幕 + 居中显示 "hello onexs."
+// otool_tab5_live2d 最小演示：把 Mao 模型（自研 self Core 管线）渲染到 Tab5 屏幕。
 // 初始化流程与 tab5_breath_control_tool 相同：NVS → M5Autodetect → 硬件 → LVGL。
 
 #include "M5Autodetect.h"
@@ -6,11 +6,17 @@
 #include "otool_lvgl_port.h"
 #include "lvgl.h"
 
+#include "otool_cubism_demo.h"
 #include "otool_cubism_tool.h"
-#include "otool_cubism_port.h"
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+
+#include <math.h>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "sdkconfig.h"
 
@@ -19,75 +25,110 @@ static const char *TAG = "main";
 static m5::tab5::otool_tab5_component g_comp;
 
 /* ------------------------------------------------------------------ */
-/* otool_cubism_tool 最小生命周期演示（S0）                              */
-/*                                                                     */
-/* S1 尚未提供真实 display lease，因此这里使用占位端口：acquire 明确失败，  */
-/* 组件必须拒绝接管显示（可行性报告 §12-3）。                              */
+/* 模型演示：嵌入式素材（构建期从 %TEMP% 嵌入，见 main/CMakeLists.txt）   */
 /* ------------------------------------------------------------------ */
 
-static esp_err_t stub_display_acquire(void *ctx)
-{
-    (void)ctx;
-    return ESP_ERR_NOT_SUPPORTED; /* S1 实现真实租约前，显示不可接管 */
-}
+extern const uint8_t mao_moc3_start[] asm("_binary_Mao_moc3_start");
+extern const uint8_t mao_moc3_end[] asm("_binary_Mao_moc3_end");
+extern const uint8_t mao_tex_start[] asm("_binary_mao_tex_raw_start");
+extern const uint8_t mao_tex_end[] asm("_binary_mao_tex_raw_end");
 
-static esp_err_t stub_display_release(void *ctx)
-{
-    (void)ctx;
-    return ESP_OK;
-}
+namespace {
+constexpr uint16_t FB_W = 1280, FB_H = 720; /* 与 LVGL 逻辑分辨率一致 */
+constexpr int32_t  P_ANGLE_X = 0;           /* Mao 参数索引（cdi3 顺序） */
+constexpr int32_t  P_ANGLE_Y = 1;
+constexpr int32_t  P_EYE_L_OPEN = 5;
+constexpr int32_t  P_EYE_R_OPEN = 8;
 
-static esp_err_t stub_display_get_info(void *ctx, otool_cubism_display_info_t *out)
+uint16_t *s_fb = nullptr;                   /* PSRAM 帧缓冲（RGB565） */
+lv_obj_t *s_img = nullptr;
+lv_image_dsc_t s_img_dsc = {};
+otool::cubism::demo::model_handle *s_model = nullptr;
+} // namespace
+
+static void demo_model_task(void *arg)
 {
-    (void)ctx;
-    if (out == nullptr) {
-        return ESP_ERR_INVALID_ARG;
+    (void)arg;
+    TickType_t last = xTaskGetTickCount();
+    float t = 0.0f;
+    const float period = 3.4f;              /* 眨眼周期（s） */
+    while (true) {
+        vTaskDelayUntil(&last, pdMS_TO_TICKS(50));
+        t += 0.05f;
+
+        /* 轻微头部摆动 + 周期性眨眼 */
+        const float ang_x = 8.0f * sinf(t * 0.6f);
+        const float ang_y = 6.0f * sinf(t * 0.8f + 1.2f);
+        float blink = 1.0f;
+        const float ph = fmodf(t, period);
+        if (ph < 0.18f) {
+            blink = 1.0f - ph / 0.18f;      /* 闭眼 */
+        } else if (ph < 0.36f) {
+            blink = (ph - 0.18f) / 0.18f;   /* 睁眼 */
+        }
+        otool::cubism::demo::model_set_param(s_model, P_ANGLE_X, ang_x);
+        otool::cubism::demo::model_set_param(s_model, P_ANGLE_Y, ang_y);
+        otool::cubism::demo::model_set_param(s_model, P_EYE_L_OPEN, blink);
+        otool::cubism::demo::model_set_param(s_model, P_EYE_R_OPEN, blink);
+
+        if (!otool::cubism::demo::model_render(s_model, s_fb, FB_W, FB_H)) {
+            ESP_LOGE(TAG, "model_render failed");
+            break;
+        }
+
+        otool_lvgl_port_lock(0);
+        lv_obj_invalidate(s_img);
+        otool_lvgl_port_unlock();
     }
-    out->phys_width      = 720;
-    out->phys_height     = 1280;
-    out->logical_width   = 1280;
-    out->logical_height  = 720;
-    out->bytes_per_pixel = 2;
-    return ESP_OK;
+    vTaskDelete(nullptr);
 }
 
-static const otool_cubism_display_port_t s_stub_display_port = {
-    .ctx = nullptr,
-    .acquire = stub_display_acquire,
-    .release = stub_display_release,
-    .present = nullptr,
-    .get_info = stub_display_get_info,
-};
-
-static void demo_cubism_lifecycle(void)
+static void demo_cubism_model(void)
 {
-    static otool::cubism::otool_cubism_tool tool;
-
-    otool_cubism_config_t cfg = {};
-    cfg.display = &s_stub_display_port;
-    cfg.storage = nullptr; /* S2 接入素材端口 */
-
-    esp_err_t err = tool.init(cfg);
-    ESP_LOGI(TAG, "cubism init -> %s", esp_err_to_name(err));
-    if (err != ESP_OK) {
+    /* 帧缓冲：PSRAM */
+    s_fb = (uint16_t *)heap_caps_malloc((size_t)FB_W * FB_H * 2,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_fb == nullptr) {
+        ESP_LOGE(TAG, "no PSRAM for framebuffer");
         return;
     }
 
-    otool_cubism_status_t st = {};
-    tool.get_status(&st);
-    ESP_LOGI(TAG, "cubism state=%d package_version=%lu",
-             (int)st.state, (unsigned long)st.package_version);
+    /* 素材：构建期嵌入的 moc3 + RGBA4444 纹理 */
+    otool::cubism::demo::model_asset asset = {};
+    asset.moc3 = mao_moc3_start;
+    asset.moc3_size = (size_t)(mao_moc3_end - mao_moc3_start);
+    asset.tex = mao_tex_start;
+    asset.tex_w = 1024;
+    asset.tex_h = 1024;
 
-    /* 无 storage 端口 → 明确失败，不静默降级 */
-    err = tool.load_package("/sdcard/live2d/manifest.bin");
-    ESP_LOGI(TAG, "cubism load_package (no storage) -> %s", esp_err_to_name(err));
+    s_model = otool::cubism::demo::model_create(asset);
+    if (s_model == nullptr) {
+        ESP_LOGE(TAG, "model_create failed");
+        return;
+    }
 
-    /* start 需要 LOADED + 显示租约；租约不可用 → 拒绝接管显示 */
-    err = tool.start(OTOOL_CUBISM_MODE_CLIP_PLAYER);
-    ESP_LOGI(TAG, "cubism start (lease unavailable) -> %s", esp_err_to_name(err));
+    /* LVGL image 直接引用帧缓冲（无拷贝） */
+    s_img_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    s_img_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+    s_img_dsc.header.w = FB_W;
+    s_img_dsc.header.h = FB_H;
+    s_img_dsc.header.stride = FB_W * 2;
+    s_img_dsc.data_size = (uint32_t)FB_W * FB_H * 2;
+    s_img_dsc.data = reinterpret_cast<const uint8_t *>(s_fb);
 
-    err = tool.deinit();
-    ESP_LOGI(TAG, "cubism deinit -> %s", esp_err_to_name(err));
+    otool_lvgl_port_lock(0);
+    lv_obj_t *scr = lv_scr_act();
+    lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
+
+    s_img = lv_image_create(scr);
+    lv_image_set_src(s_img, &s_img_dsc);
+    lv_obj_set_pos(s_img, 0, 0);
+    otool_lvgl_port_unlock();
+
+    ESP_LOGI(TAG, "model demo ready: params=%d", otool::cubism::demo::model_param_count(s_model));
+
+    BaseType_t ok = xTaskCreate(demo_model_task, "cubism_demo", 8192, nullptr, 5, nullptr);
+    ESP_ERROR_CHECK(ok == pdPASS ? ESP_OK : ESP_FAIL);
 }
 
 extern "C" void app_main(void)
@@ -141,21 +182,6 @@ extern "C" void app_main(void)
     err = g_comp.lvgl_init();
     ESP_ERROR_CHECK(err);
 
-    // 创建 UI：白色背景 + 居中文本（须在 LVGL 锁内执行）
-    otool_lvgl_port_lock(0);
-
-    lv_obj_t *scr = lv_scr_act();
-    lv_obj_set_style_bg_color(scr, lv_color_white(), 0);
-
-    lv_obj_t *label = lv_label_create(scr);
-    lv_label_set_text(label, "hello onexs.");
-    lv_obj_set_style_text_color(label, lv_color_black(), 0);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_36, 0);
-    lv_obj_center(label);
-
-    otool_lvgl_port_unlock();
-
-    ESP_LOGI(TAG, "UI ready");
-
-    demo_cubism_lifecycle();
+    // 模型演示：自研 Core 渲染 → LVGL image 上屏
+    demo_cubism_model();
 }

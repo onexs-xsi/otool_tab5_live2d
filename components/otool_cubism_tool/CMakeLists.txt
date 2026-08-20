@@ -45,6 +45,10 @@ if(CONFIG_OTOOL_CUBISM_ENABLE_REALTIME)
         list(APPEND otool_cubism_tool_srcs
             "src/core/self/moc3_validate.cpp"
             "src/core/self/moc3_ir.cpp"
+            "src/core/self/moc3_update.cpp"
+            "src/renderer/soft_raster.cpp"
+            "src/renderer/model_render.cpp"
+            "src/demo/model_demo.cpp"
         )
     endif()
     message(STATUS "otool_cubism_tool: REALTIME (SELF) enabled")
@@ -53,7 +57,7 @@ endif()
 idf_component_register(
     SRCS ${otool_cubism_tool_srcs}
     INCLUDE_DIRS "include"
-    PRIV_INCLUDE_DIRS "src"
+    PRIV_INCLUDE_DIRS "src" "src/core/self" "src/renderer"
     REQUIRES
     PRIV_REQUIRES
         esp_timer

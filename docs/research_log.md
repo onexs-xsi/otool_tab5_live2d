@@ -248,5 +248,50 @@ uv[0..3]、indices[0..5]、param[0]（max30/min-30/default0）、kf_pos[0..3] �
 - 渲染输出 lit=0：rotation 父链的坐标语义问题（难点 18）
 - 下一步：官方 Core（Windows x64 静态库）作为 oracle 跑 Mao，导出顶点对照 → 修正坐标语义 → 正确渲染
 
+---
+
+## 2026-08-21 — 第六轮：顶点管线对齐官方 Core（oracle 验证通过）、渲染映射修复、固件集成
+
+### 关键 bug 修复（难点记录）
+
+20. **rotation 父合成 out-param 越界写（根因）**：`parent_transform_point` 的 rotation 分支把
+    `ox`（float*）直接传给 `rot_transform_point(..., out)`，该函数写 `out[0]/out[1]`；
+    调用方 `wx`/`wy` 是两个独立栈变量、未必相邻，`out[1]` 写到了无关栈位 → `wy` 恒为 0。
+    现象：rot[5] 父变换后 origin 应为 (0,0.6905) 却得 (0,0)，探针方向恒零 → adj=+90°
+    （rot[5]/rot[6] 角度凭空多 90°，rot[28] 从 -165 变 -75，整条链顶点错位）。
+    修复：`float tmp[2]` 中转再分别写 `*ox/*oy`。教训：**仿射工具函数签名若只收一个
+    out 指针，调用方必须保证 out[0..1] 连续，否则用临时数组**。
+21. **渲染映射缺画布回乘 + y 符号**：update 输出是归一化坐标（x 按画布宽 /5800，
+    y 为官方 y 的相反数），render 直接用 `x*s+ox` 映射导致全图落在原点附近（lit=0）。
+    修复为 `scr_x = x*cw*s+ox`、`scr_y = -y*ch*s+oy`（与 oracle 渲染公式一致）。
+
+### 里程碑：C++ 管线与官方 Core 输出一致
+
+- sim 对照（chain_sim2.py）：C++ 的 rot[0/5/6/28] 合成 origin/angle/scale、warp[0]/warp[31]
+  网格、am[0] v0/v1/v2 与 sim **逐值一致**（如 am[0] v0=(0.115109,-0.20448)）。
+- 官方 Core oracle（core_oracle.exe，临时目录）D0 v0=(0.115109,0.20448)：与自研输出
+  **仅 y 符号差**（官方 y-up vs 自研 y-down 归一化，渲染映射已补偿）。
+- 渲染验证：自研管线 lit=11256 px (4.9%)，oracle 顶点渲染 lit=11253 px——**一致**。
+
+### 固件集成（进行中）
+
+- 组件 CMakeLists 追加 `moc3_update.cpp / soft_raster.cpp / model_render.cpp /
+  demo/model_demo.cpp`（REALTIME+SELF），PRIV_INCLUDE_DIRS 增加 src/core/self、
+  src/renderer（此前缺失导致 "Missing moc3_ir.hpp"）。
+- sdkconfig 启用 `OTOOL_CUBISM_ENABLE_REALTIME=y` +
+  `OTOOL_CUBISM_CORE_BACKEND_SELF=y`。
+- 新增公共演示 API `otool_cubism_demo.h`（model_create/destroy/set_param/render）：
+  moc3 拷 64B 对齐 PSRAM → IR → runtime → 每帧 update+软光栅到 RGB565 帧缓冲；
+  main 只调公共 API，不碰 Core 私有头（符合组件架构约定）。
+- main：LVGL image（1280×720 RGB565 直接引用帧缓冲，零拷贝）上屏；
+  演示任务 50ms/帧：ParamAngleX/Y 轻微摆动 + 周期性眨眼。
+- 素材规则：Mao.moc3 + mao_tex.raw 仅构建期经 `target_add_binary_data` 从
+  `%TEMP%/otool_cubism_research` 嵌入（可用 OTOOL_MAO_DIR 覆盖），**不进入仓库**。
+
+### 当前状态
+
+- host 侧渲染正确（lit 11256 ≈ oracle 11253），提交 4c927db / e4129bf
+- 固件编译验证中；下一步：idf.py build 通过 → COM3 烧录 → 实机确认 Mao 上屏
+
 
 
