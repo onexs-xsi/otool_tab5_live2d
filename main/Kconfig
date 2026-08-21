@@ -1,0 +1,39 @@
+menu "otool_tab5_live2d app"
+
+config OTOOL_WIFI_SSID
+    string "Wi-Fi SSID"
+    default "xiaomibe72"
+    help
+        STA SSID to connect to after ESP-Hosted (C6) init.
+
+config OTOOL_WIFI_PASSWORD
+    string "Wi-Fi password"
+    default "1234567890"
+
+config OTOOL_WIFI_MAX_RETRY
+    int "Wi-Fi connect max retries"
+    default 10
+    range 1 100
+
+config OTOOL_LLM_API_KEY
+    string "Doubao Ark API key (runtime credential)"
+    default "OTOOL_LLM_API_KEY_FROM_SDKCONFIG"
+    help
+        Passed to otool_llm_client at runtime; never compiled into the SDK.
+        NOTE: this project's policy allows committing this key (local dev budget).
+
+config OTOOL_LLM_MODEL
+    string "Doubao model id"
+    default "doubao-seed-2-1-turbo-260628"
+
+config OTOOL_LLM_LLM_TASK_STACK_SIZE
+    int "LLM worker task stack size (bytes)"
+    default 16384
+    range 8192 65536
+
+config OTOOL_LLM_UI_REFRESH_MS
+    int "LLM UI refresh period (ms)"
+    default 100
+    range 20 1000
+
+endmenu

@@ -1,0 +1,12 @@
+{
+  "name": "otool_esp_hosted_fw_update",
+  "version": "0.1.0",
+  "description": "ESP-IDF OTA skeleton for ESP Hosted firmware update",
+  "frameworks": "espidf",
+  "platforms": "espressif32",
+  "build": {
+    "includeDir": "include",
+    "srcDir": "src"
+  }
+}
+

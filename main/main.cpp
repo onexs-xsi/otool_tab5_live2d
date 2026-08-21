@@ -1,5 +1,5 @@
-// otool_tab5_live2d 最小演示：白屏 + hello onexs。
-// 初始化流程与 tab5_breath_control_tool 相同：NVS → M5Autodetect → 硬件 → LVGL。
+// otool_tab5_live2d：Tab5 最小演示 → 联网（C6 Wi-Fi）+ 豆包 LLM 流式对话。
+// 初始化流程：NVS → M5Autodetect → 硬件 → LVGL → llm_app（ESP-Hosted + LLM worker + UI）。
 
 #include "M5Autodetect.h"
 #include "otool_tab5_component.h"
@@ -11,28 +11,11 @@
 
 #include "sdkconfig.h"
 
+#include "llm_app.h"
+
 static const char *TAG = "main";
 
 static m5::tab5::otool_tab5_component g_comp;
-
-/* ------------------------------------------------------------------ */
-/* 白屏 + hello onexs 界面                                              */
-/* ------------------------------------------------------------------ */
-
-static void show_hello_onexs(void)
-{
-    otool_lvgl_port_lock(0);
-
-    lv_obj_t *scr = lv_scr_act();
-    lv_obj_set_style_bg_color(scr, lv_color_white(), 0);
-
-    lv_obj_t *label = lv_label_create(scr);
-    lv_label_set_text(label, "hello onexs");
-    lv_obj_set_style_text_color(label, lv_color_black(), 0);
-    lv_obj_center(label);
-
-    otool_lvgl_port_unlock();
-}
 
 extern "C" void app_main(void)
 {
@@ -85,6 +68,6 @@ extern "C" void app_main(void)
     err = g_comp.lvgl_init();
     ESP_ERROR_CHECK(err);
 
-    // 白屏 + hello onexs
-    show_hello_onexs();
+    // 联网 + LLM 对话
+    llm_app_start();
 }

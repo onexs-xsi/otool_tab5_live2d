@@ -1,0 +1,61 @@
+menu "Otool ESP Hosted FW Update"
+
+config OTOOL_ESP_HOSTED_FW_CHUNK_SIZE
+    int "Firmware OTA chunk size"
+    range 256 4096
+    default 1024
+
+config OTOOL_ESP_HOSTED_FW_FAIL_ON_HOST_NEWER_MAJOR_MINOR
+    bool "Fail OTA when host major.minor is newer than slave"
+    default n
+    help
+        If enabled, abort OTA when the host ESP-Hosted major.minor version is
+        newer than the currently running slave version. This prevents entering
+        a transfer path known to be risky for mismatched protocol revisions.
+
+config OTOOL_ESP_HOSTED_FW_TRANSPORT_ESP_HOSTED
+    bool "Enable esp_hosted transport"
+    default y
+
+config OTOOL_ESP_HOSTED_FW_PROVIDER_EMBEDDED
+    bool "Enable embedded firmware provider"
+    default n
+
+config OTOOL_ESP_HOSTED_FW_EMBED_NETWORK_ADAPTER
+    bool "Embed single network_adapter.bin (app-only, built from slave source)"
+    default n
+    help
+        Enable this to embed a single network_adapter.bin produced directly from
+        the slave source build (example/esp-hosted-mcu-main/slave).
+        This is the recommended production approach: it ties the embedded firmware
+        to a specific, traceable slave commit rather than a pre-packaged binary blob.
+
+        Before enabling, build the slave firmware and copy the output:
+          cd example/esp-hosted-mcu-main/slave
+          idf.py set-target esp32c6 && idf.py build
+          cp build/network_adapter.bin \
+             <component>/firmware/esp32c6_wifi_firmware/network_adapter.bin
+
+        The firmware is served under the name "network_adapter".
+        When this option is enabled together with OTOOL_ESP_HOSTED_FW_PROVIDER_EMBEDDED,
+        both sets of binaries are embedded; "network_adapter" takes precedence for any
+        name lookup that would otherwise fall through to the legacy variants.
+
+config OTOOL_ESP_HOSTED_FW_ENABLE_COMPAT_API
+    bool "Enable otool_esp_hosted_wifi_firmware_ota compatibility API"
+    default n
+
+config OTOOL_ESP_HOSTED_FW_ENABLE_CONSOLE_CMDS
+    bool "Register esp_console 'fw' command group"
+    default n
+    help
+        Register a 'fw' command in esp_console that provides:
+          fw list          - list all embedded firmware images with sizes
+          fw info          - query co-processor current firmware version
+          fw flash <name>  - OTA-flash a named firmware image
+
+        Requires the 'console' IDF component.
+        Enable CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG in sdkconfig to route
+        the interactive prompt through USB-Serial-JTAG.
+
+endmenu

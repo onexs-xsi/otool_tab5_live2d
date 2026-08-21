@@ -5,3 +5,8 @@ dependencies:
   ## dependencies.lock 中显示为 6.1.0 属正常规范化行为）
   idf:
     version: '>=6.1.0-beta1,<6.2.0'
+  ## ESP-Hosted: P4 主控通过 SDIO 连接 C6 从机作为 Wi-Fi/蓝牙协处理器
+  espressif/esp_hosted:
+    version: '^2.12.3'
+  espressif/esp_wifi_remote:
+    version: '^1.5.1'
