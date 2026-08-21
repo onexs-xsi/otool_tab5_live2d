@@ -7,6 +7,7 @@
 #ifndef OTOOL_LLM_TOOLS_H
 #define OTOOL_LLM_TOOLS_H
 
+#include "otool_llm_sdk.h"
 #include "esp_err.h"
 #include <stdbool.h>
 #include <stddef.h>
@@ -76,6 +77,67 @@ typedef struct {
     const char *call_id;   /**< Must match the model's call_id */
     const char *output;    /**< JSON string, e.g. {"ok":true,...} */
 } otool_llm_tool_output_t;
+
+/* ---------------- tool registry ---------------- */
+
+typedef struct otool_llm_tool_registry *otool_llm_tool_registry_handle_t;
+
+/**
+ * @brief Create an empty tool registry.
+ *
+ * @param out_reg Receives the handle.
+ * @return ESP_OK, ESP_ERR_NO_MEM.
+ */
+esp_err_t otool_llm_tool_registry_create(otool_llm_tool_registry_handle_t *out_reg);
+
+/**
+ * @brief Add a tool. Deep-copies name/description/schema and validates the
+ *        schema up-front (rejected at registration, never at call time).
+ *
+ * Requirements: unique safe name (<= OTOOL_LLM_MAX_TOOL_NAME_BYTES), valid
+ * parameters_json_schema of the supported JSON Schema subset, and
+ * (registry not sealed).
+ *
+ * @return ESP_OK, ESP_ERR_TOOL_SCHEMA, ESP_ERR_INVALID_ARG (duplicate/bad name),
+ *         ESP_ERR_NO_MEM, ESP_ERR_INVALID_STATE (sealed).
+ */
+esp_err_t otool_llm_tool_registry_add(otool_llm_tool_registry_handle_t reg,
+                                      const otool_llm_tool_definition_t *tool);
+
+/**
+ * @brief Seal the registry: no more add/remove. Afterwards lookups are lock-free.
+ */
+esp_err_t otool_llm_tool_registry_seal(otool_llm_tool_registry_handle_t reg);
+
+/**
+ * @brief Destroy the registry (only when no agent/session uses it; see plan §6.1).
+ */
+void otool_llm_tool_registry_destroy(otool_llm_tool_registry_handle_t reg);
+
+/**
+ * @brief Find a tool by name (safe before and after seal).
+ * @return Pointer owned by the registry, or NULL.
+ */
+const otool_llm_tool_definition_t *otool_llm_tool_registry_find(
+    otool_llm_tool_registry_handle_t reg, const char *name);
+
+/**< Number of tools currently in the registry. */
+size_t otool_llm_tool_registry_count(otool_llm_tool_registry_handle_t reg);
+
+/**< Tool at index i (0 <= i < count). */
+const otool_llm_tool_definition_t *otool_llm_tool_registry_at(
+    otool_llm_tool_registry_handle_t reg, size_t index);
+
+/**
+ * @brief Validate a tool-call arguments instance against a registered schema.
+ *
+ * @param tool Tool whose schema is checked (registry-owned).
+ * @param arguments_json Model-provided arguments (untrusted).
+ * @param arguments_len Length of arguments_json.
+ * @return ESP_OK, OTOOL_LLM_ERR_TOOL_ARGUMENTS (validation failed), ESP_ERR_INVALID_ARG.
+ */
+esp_err_t otool_llm_tool_arguments_validate(const otool_llm_tool_definition_t *tool,
+                                            const char *arguments_json, size_t arguments_len);
 
 #ifdef __cplusplus
 }

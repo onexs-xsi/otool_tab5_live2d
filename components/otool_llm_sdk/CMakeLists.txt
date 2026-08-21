@@ -1,5 +1,7 @@
 idf_component_register(
     SRCS
+        "src/agent/tool_registry.c"
+        "src/agent/tool_schema.c"
         "src/core/client.c"
         "src/core/error.c"
         "src/core/request.c"

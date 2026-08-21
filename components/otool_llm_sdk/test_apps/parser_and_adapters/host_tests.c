@@ -976,6 +976,147 @@ static void test_responses_build_request_with_tools(void)
     CHECK(strstr(buf, "\"call_id\":\"call_xyz\"") != NULL, "output call_id");
 }
 
+/* ---- WP3: tool registry + schema validation tests ---- */
+
+static const char *good_schema =
+    "{\"type\":\"object\",\"properties\":{"
+    "\"city\":{\"type\":\"string\"},"
+    "\"days\":{\"type\":\"integer\",\"enum\":[1,3,7]},"
+    "\"verbose\":{\"type\":\"boolean\"},"
+    "\"note\":{\"type\":\"null\"}"
+    "},\"required\":[\"city\"],\"additionalProperties\":false}";
+
+static void test_registry_basic(void)
+{
+    otool_llm_tool_registry_handle_t reg = NULL;
+    CHECK(otool_llm_tool_registry_create(&reg) == ESP_OK, "reg create");
+    CHECK(reg != NULL, "reg non-null");
+
+    otool_llm_tool_definition_t tool = {};
+    tool.struct_size = sizeof(tool);
+    tool.name = "get_weather";
+    tool.description = "weather";
+    tool.parameters_json_schema = good_schema;
+    tool.strict = true;
+    tool.flags = OTOOL_LLM_TOOL_READ_ONLY;
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == ESP_OK, "add tool");
+    CHECK_EQ(otool_llm_tool_registry_count(reg), 1);
+
+    /* 重复名称拒绝 */
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == ESP_ERR_INVALID_ARG, "dup name");
+
+    /* 非法名称拒绝 */
+    tool.name = "bad name!";
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == ESP_ERR_INVALID_ARG, "bad name");
+    tool.name = "tool_ok";
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == ESP_OK, "second tool");
+    CHECK_EQ(otool_llm_tool_registry_count(reg), 2);
+
+    /* 注册后原字符串可释放（深拷贝） */
+    tool.name = "get_weather";
+    const otool_llm_tool_definition_t *found = otool_llm_tool_registry_find(reg, "get_weather");
+    CHECK(found != NULL, "find");
+    CHECK_STR(found->name, "get_weather");
+    CHECK(found->parameters_json_schema != good_schema, "schema deep-copied");
+
+    /* seal 后 add 拒绝 */
+    CHECK(otool_llm_tool_registry_seal(reg) == ESP_OK, "seal");
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == ESP_ERR_INVALID_STATE, "add after seal");
+
+    otool_llm_tool_registry_destroy(reg);
+}
+
+static void test_registry_schema_rejection(void)
+{
+    otool_llm_tool_registry_handle_t reg = NULL;
+    otool_llm_tool_registry_create(&reg);
+
+    otool_llm_tool_definition_t tool = {};
+    tool.struct_size = sizeof(tool);
+    tool.name = "bad_schema";
+    tool.parameters_json_schema = NULL;
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == OTOOL_LLM_ERR_TOOL_SCHEMA, "null schema");
+
+    /* 非法 JSON */
+    tool.parameters_json_schema = "{not json";
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == OTOOL_LLM_ERR_TOOL_SCHEMA, "bad json schema");
+
+    /* 顶层非 object */
+    tool.parameters_json_schema = "{\"type\":\"string\"}";
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == OTOOL_LLM_ERR_TOOL_SCHEMA, "non-object top");
+
+    /* additionalProperties: true */
+    tool.parameters_json_schema =
+        "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"string\"}},"
+        "\"additionalProperties\":true}";
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == OTOOL_LLM_ERR_TOOL_SCHEMA, "ap true");
+
+    /* required 引用未声明字段 */
+    tool.parameters_json_schema =
+        "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"string\"}},"
+        "\"required\":[\"nope\"]}";
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == OTOOL_LLM_ERR_TOOL_SCHEMA, "required unknown");
+
+    /* 不支持的属性类型 */
+    tool.parameters_json_schema =
+        "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"array\"}}}";
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == OTOOL_LLM_ERR_TOOL_SCHEMA, "array prop");
+
+    /* 未实现关键字 */
+    tool.parameters_json_schema =
+        "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"string\",\"minLength\":2}}}";
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == OTOOL_LLM_ERR_TOOL_SCHEMA, "minLength");
+
+    /* 嵌套 object 属性 */
+    tool.parameters_json_schema =
+        "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"object\",\"properties\":{}}}}";
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == OTOOL_LLM_ERR_TOOL_SCHEMA, "nested object");
+
+    otool_llm_tool_registry_destroy(reg);
+}
+
+static void test_arguments_validation(void)
+{
+    otool_llm_tool_definition_t tool = {};
+    tool.parameters_json_schema = good_schema;
+
+    /* 合法 */
+    CHECK(otool_llm_tool_arguments_validate(&tool, "{\"city\":\"北京\"}",
+                                            strlen("{\"city\":\"北京\"}")) == ESP_OK,
+          "valid args");
+    CHECK(otool_llm_tool_arguments_validate(&tool, "{\"city\":\"x\",\"days\":3}",
+                                            strlen("{\"city\":\"x\",\"days\":3}")) == ESP_OK,
+          "valid args 2");
+    CHECK(otool_llm_tool_arguments_validate(&tool, "{\"city\":\"x\",\"verbose\":true}",
+                                            strlen("{\"city\":\"x\",\"verbose\":true}")) == ESP_OK,
+          "valid args 3");
+    CHECK(otool_llm_tool_arguments_validate(&tool, "{\"city\":\"x\",\"note\":null}",
+                                            strlen("{\"city\":\"x\",\"note\":null}")) == ESP_OK,
+          "null type ok");
+
+    /* 缺 required */
+    CHECK(otool_llm_tool_arguments_validate(&tool, "{\"days\":3}", strlen("{\"days\":3}")) ==
+              OTOOL_LLM_ERR_TOOL_ARGUMENTS,
+          "missing required");
+    /* 未知字段 */
+    CHECK(otool_llm_tool_arguments_validate(&tool, "{\"city\":\"x\",\"evil\":1}",
+                                            strlen("{\"city\":\"x\",\"evil\":1}")) ==
+              OTOOL_LLM_ERR_TOOL_ARGUMENTS,
+          "unknown field");
+    /* 类型错误 */
+    CHECK(otool_llm_tool_arguments_validate(&tool, "{\"city\":123}", strlen("{\"city\":123}")) ==
+              OTOOL_LLM_ERR_TOOL_ARGUMENTS,
+          "wrong type");
+    /* 非 object arguments */
+    CHECK(otool_llm_tool_arguments_validate(&tool, "[1,2]", 5) == OTOOL_LLM_ERR_TOOL_ARGUMENTS,
+          "array args");
+    /* enum 不匹配 */
+    CHECK(otool_llm_tool_arguments_validate(&tool, "{\"city\":\"x\",\"days\":2}",
+                                            strlen("{\"city\":\"x\",\"days\":2}")) ==
+              OTOOL_LLM_ERR_TOOL_ARGUMENTS,
+          "enum mismatch");
+}
+
 /* ---- chat adapter tests ---- */
 
 static void test_chat_happy_path(void)
@@ -1233,6 +1374,9 @@ int main(void)
     puts("t:provider_err"); test_provider_error_parsers();
     puts("t:provider_auth"); test_provider_auth_headers();
     puts("t:resolve"); test_protocol_resolve();
+    puts("t:reg_basic"); test_registry_basic();
+    puts("t:reg_schema"); test_registry_schema_rejection();
+    puts("t:args_validate"); test_arguments_validation();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
