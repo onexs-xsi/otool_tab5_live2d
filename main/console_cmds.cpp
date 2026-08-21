@@ -4,6 +4,7 @@
 #include "llm_app.h"
 #include "wifi_app.h"
 #include "credential_store.h"
+#include "agent_app.h"
 
 #include "esp_console.h"
 #include "esp_log.h"
@@ -210,6 +211,52 @@ static int do_cred_clear(int argc, char **argv)
     return 0;
 }
 
+/* ---------------- agent ---------------- */
+
+static int do_agent_run(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("usage: agent <text...>   (tool-enabled agent run; Ctrl+C via agent-cancel)\n");
+        return 1;
+    }
+    char question[256];
+    size_t pos = 0;
+    for (int i = 1; i < argc && pos < sizeof(question) - 1; i++) {
+        if (i > 1 && pos < sizeof(question) - 2) {
+            question[pos++] = ' ';
+        }
+        size_t n = strlen(argv[i]);
+        if (n > sizeof(question) - 1 - pos) {
+            n = sizeof(question) - 1 - pos;
+        }
+        memcpy(question + pos, argv[i], n);
+        pos += n;
+    }
+    question[pos] = '\0';
+    agent_app_ask(question);
+    printf("agent: run queued: %s\n", question);
+    return 0;
+}
+
+static int do_agent_cancel(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    agent_app_cancel();
+    printf("agent: cancel requested\n");
+    return 0;
+}
+
+static int do_agent_status(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    char buf[192];
+    agent_app_status(buf, sizeof(buf));
+    printf("agent: %s\n", buf);
+    return 0;
+}
+
 /* ---------------- init ---------------- */
 
 static void register_commands(void)
@@ -266,6 +313,21 @@ static void register_commands(void)
     cmd.command = "cred-clear";
     cmd.help = "erase a credential: cred-clear <wifi_ssid|wifi_pass|llm_key>";
     cmd.func = &do_cred_clear;
+    esp_console_cmd_register(&cmd);
+
+    cmd.command = "agent";
+    cmd.help = "tool-enabled agent run: agent <text...>";
+    cmd.func = &do_agent_run;
+    esp_console_cmd_register(&cmd);
+
+    cmd.command = "agent-cancel";
+    cmd.help = "cancel the active agent run";
+    cmd.func = &do_agent_cancel;
+    esp_console_cmd_register(&cmd);
+
+    cmd.command = "agent-status";
+    cmd.help = "agent worker status";
+    cmd.func = &do_agent_status;
     esp_console_cmd_register(&cmd);
 }
 

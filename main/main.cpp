@@ -15,6 +15,7 @@
 #include "wifi_app.h"
 #include "ui_app.h"
 #include "credential_store.h"
+#include "agent_app.h"
 #include "console_cmds.h"
 
 static const char *TAG = "main";
@@ -84,6 +85,9 @@ extern "C" void app_main(void)
     // LLM 状态界面（独立模块 ui_app）
     ui_app_start();
 
-    // USB-Serial-JTAG 命令行（help / wifi / llm / free / version）
+    // Agent（工具调用）worker（独立模块 agent_app）
+    agent_app_start();
+
+    // USB-Serial-JTAG 命令行（help / wifi / llm / agent / cred / free / version）
     console_start();
 }
