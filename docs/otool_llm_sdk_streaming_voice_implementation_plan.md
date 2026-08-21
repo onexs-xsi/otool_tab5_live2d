@@ -1,10 +1,10 @@
 # `otool_llm_sdk` 流式文本与豆包语音扩展实施计划
 
-> 状态：**已决策，待实现**  
+> 状态：**实施中（WP0–WP3 完成，见 §17 进度记录）**  
 > 计划日期：2026-08-22  
 > 目标平台：ESP32-P4 / ESP-IDF 6.1 系列  
 > 组件位置：`components/otool_llm_sdk`  
-> 本文用途：交给后续 agent 直接拆任务、实现和验收；本文不包含本轮代码实现
+> 本文用途：交给后续 agent 直接拆任务、实现和验收；关键进度与真实命令/结果记录在 §17
 
 ## 1. 最终决策
 
@@ -633,3 +633,109 @@ esp_err_t otool_llm_voice_session_close(...);
 - [Espressif esp_websocket_client](https://github.com/espressif/esp-protocols/tree/master/components/esp_websocket_client)：未来 P4 WebSocket transport 候选。
 - [Espressif cJSON component](https://components.espressif.com/components/espressif/cjson/versions/1.7.19~2/readme)：ESP-IDF 6 managed JSON dependency。
 - [WHATWG Server-Sent Events processing model](https://html.spec.whatwg.org/multipage/server-sent-events.html)：SSE 字节与字段状态机基准。
+
+## 17. 实施进度记录
+
+> 本节由执行 agent 维护：每完成一个 WP 追加真实命令与结果。当前状态：**WP0–WP3 完成**，WP4 进行中。
+
+### WP0 安全清理与基线（完成）
+
+改动：
+
+- `main/CMakeLists.txt`：删除真实 `DOUBAO_API_KEY` 及 `target_compile_definitions`，替换为注释说明（密钥改由运行时经 `otool_llm_client_config_t.api_key` / NVS 注入）。commit `1b32657` 中曾按用户选择包含该 Key；**旧 Key 仍待用户到火山引擎控制台吊销/轮换**（仓库为公开仓库）。
+- 应用层前置条件核查：`main/main.cpp` 无任何网络初始化/时间同步代码（grep `NETWORK|WIFI|sntp` 无命中）。按计划只记录调用契约：应用负责 Wi-Fi 与时间同步，SDK 不接管网络初始化。
+
+基线构建（旧原型）：
+
+```
+$ idf.py build   # ESP-IDF v6.1-beta1, esp32p4
+components/otool_llm_sdk/src/otool_llm_sdk.c:367:60: error:
+'esp_http_client_event_t' {aka 'struct esp_http_client_event'} has no member named 'status_code'
+```
+
+结论：已提交的旧单文件原型在 IDF 6.1 上**无法编译**（`evt->status_code` 不存在，需 `esp_http_client_get_status_code()`），验证了 §3 必须替换的判断。新实现未再使用该成员。
+
+### WP1 组件骨架与公开 API（完成）
+
+目录结构与 §9 一致（另新增 `src/providers/provider_table.c` 与 `src/protocols/protocol_resolve.c` 两个小文件，用于 preset 表与协议解析，已记录偏差）：
+
+```
+include/  otool_llm_sdk.h（版本/错误码/provider/protocol 枚举/client 生命周期）
+          otool_llm_text.h（角色/消息/请求/8 类流式事件/回调/request 生命周期）
+private_include/  otool_llm_internal.h  otool_llm_provider.h
+                  otool_llm_protocol.h  otool_llm_transport.h  otool_llm_sse_parser.h
+src/core/  client.c  request.c  error.c  secure_zero.c
+src/providers/  provider_openai.c  provider_ark.c  provider_custom.c  provider_table.c
+src/protocols/  responses_sse.c  chat_completions_sse.c  protocol_resolve.c
+src/transports/  http_stream.c  sse_parser.c
+test_apps/parser_and_adapters/  host_tests.c + host_shim/ + third_party/cjson/（MIT，供宿主测试）
+test_apps/transport_test/       linux/esp32 传输层测试 app（WP4）
+test_apps/local_sse_server.py   本地可控 SSE server（WP4）
+```
+
+已删除旧单文件 `src/otool_llm_sdk.c` 与旧 `otool_llm_chat_stream()` API。
+
+关键实现决策（与计划一致的落实点）：
+
+- 错误码基址 `OTOOL_LLM_ERR_BASE 0x1D000`（检查过 IDF 6.1 各组件未占用 0x1D000–0x1FFF）；IDF 6.1 无 `ESP_ERR_UNSUPPORTED`，统一使用自有 `OTOOL_LLM_ERR_UNSUPPORTED`；
+- 内部 provider preset 结构体命名为 `otool_llm_provider_preset_t`，避免与公开枚举 `otool_llm_provider_t` 冲突（曾出现重定义，已修复）；内部消息类型 `otool_llm_request_message_t`（char * 自有存储）与公开 `otool_llm_text_message_t` 分离；
+- `struct_size` 版本检查、`api_key` 深拷贝 + destroy 时 `otool_llm_secure_zero()`（volatile 字节清零防优化）；
+- `PROTOCOL_AUTO` 仅按 provider 静态默认解析；CUSTOM + AUTO 在 create 时返回 `ESP_ERR_INVALID_ARG`；HTTPS 强制：`OTOOL_LLM_ALLOW_INSECURE_HTTP=n` 时 base_url 非 `https://` 前缀直接拒绝（bool 默认 n 的 Kconfig 符号在 sdkconfig.h 中不存在，用 `#ifdef` 判断，勿用 `#if CONFIG_X`）；
+- Chat 协议收到 `previous_response_id` / `store` 在 `request_create()` 即返回 `OTOOL_LLM_ERR_UNSUPPORTED`（禁止静默丢字段）；
+- 每个 request 恰好一个 terminal event（`COMPLETED/INCOMPLETE/CANCELLED/ERROR`），`exec_emit` 在 terminal 后忽略后续事件；
+- 取消使用 `esp_http_client_close()`（不开新连接）而非 `esp_http_client_cancel_request()`——后者源码 `esp_http_client.c:494` 会 `esp_transport_close` 后**重新 connect**，可能阻塞取消方且与"禁止自动重试"冲突；`close()` 只关 socket，阻塞中的 read 立即返回错误。该决策记录于此备查；
+- `otool_llm_exec_report_error()` 返回错误码（非 emit 结果），adapter 报出 terminal ERROR 后 transport 立即中止流读取；
+- Retry-After 头收集并追加进 ERROR 事件 message（`(Retry-After: 5s)`）。
+
+Kconfig/manifest/README 已按 §8.2/§10 更新：`idf_component.yml` 增加 `espressif/cjson: "^1.7.19~2"`，`PRIV_REQUIRES esp-tls espressif__cjson`。
+
+WP1 验收（编译）：
+
+```
+$ idf.py build    # ESP-IDF v6.1-beta1 / esp32p4 / ccache
+Project build complete.
+otool_tab5_live2d.bin binary size 0xb8d90 bytes (757,136); 95% app partition free
+```
+
+编译期修复记录：`-Werror` 下 picolibc `free(const char*)` 需显式 `(void *)` 转型；内部结构字段保持 `char *`（const 化反而引发 const** 告警）；`role_name` 只在 adapter 内保留。
+
+### WP2 SSE parser（完成）
+
+`src/transports/sse_parser.c`：纯字节状态机，无 esp_http_client/provider 依赖。实现 WHATWG 处理模型：CRLF/LF/CR、comment、`event/data/id/retry`、多行 data 以 `\n` 合并、空 data 不派发、last event id 持久化、id 含 NUL 忽略该行、合并 data 与单行双重硬上限（`OTOOL_LLM_MAX_SSE_EVENT_BYTES`，行额外 128 字节字段名余量）、EOF 半事件返回 `OTOOL_LLM_ERR_PROTOCOL_EOF`。
+
+设计修正（测试驱动发现）：
+
+- `feed()` 增加 `size_t *consumed` 输出——一个 chunk 内多事件时调用方必须能滚动续喂；
+- dispatch 后**延迟清空**事件缓冲（`pending_event` 标志，下次 feed/finish 才清），保证派发事件的 span 在两次 feed 之间有效（transport 的 `on_sse_event` 回调正是在这个窗口内读取）。
+
+### WP3 Responses / Chat adapter（完成）
+
+- `responses_sse.c`：cJSON 构建请求体（`cJSON_PrintPreallocated` 有界输出）；事件映射 `response.created → RESPONSE_STARTED`、`output_text.delta → TEXT_DELTA`（空 delta 允许、类型校验）、`output_text.done → TEXT_DONE`（不重发全文）、`completed → USAGE+COMPLETED`、`incomplete → USAGE+INCOMPLETE`、`failed/error → ERROR`；未知事件忽略并 DEBUG 计数；
+- `chat_completions_sse.c`：`[DONE] → COMPLETED`、`choices[0].delta.content → TEXT_DELTA`、`finish_reason` 记录、usage chunk → USAGE、多 choice → `ESP_ERR_UNSUPPORTED`、无 `[DONE]` 的 EOF → `ERROR(PROTOCOL_EOF)`；`stream_options.include_usage` 与 `max_completion_tokens/max_tokens` 按 provider capability 选择；
+- provider error parser：OpenAI（`error.message/code`）、Ark（`error` 包裹与裸 `code/message/request_id` 两种形态）、Custom 通用形态，非 JSON 错误体回退为原始前缀。
+
+宿主测试（WP2+WP3 合并）：
+
+```
+$ tcc.exe -I include -I host_shim -I private_include -I third_party/cjson \
+    -o host_tests.exe host_tests.c src/transports/sse_parser.c \
+    src/protocols/responses_sse.c src/protocols/chat_completions_sse.c \
+    src/protocols/protocol_resolve.c src/providers/*.c third_party/cjson/cJSON.c
+$ ./host_tests.exe
+1123 checks, 0 failures
+```
+
+覆盖：SSE 全分片位置对拍（整喂 vs 任意 split）、逐字节喂（UTF-8 跨字节拆分）、CRLF/LF/CR、多事件单 chunk、comment/retry/未知字段、value 单空格剥离、空 data 不派发、事件名/id 持久化、精确到上限/超上限（数据、多行合并、单行、事件名、id）、EOF 半事件；Responses happy path（含中文/空 delta/usage）、incomplete、failed、error 事件、未知事件容忍、坏 JSON/类型错误、on_eof；Chat happy path（role chunk/空 delta/finish reason/usage/[DONE]）、多 choice 拒绝、流中 error、坏 JSON、无 [DONE] EOF；provider 错误解析与 auth header；协议解析矩阵。
+
+测试工具：TinyCC 0.9.27（`%TEMP%\tcc`，宿主无 gcc/clang/MSVC）。测试期间发现并修复：tcc 对 `#pragma once` 行为异常 → 全部头文件改用经典 include guard；PowerShell 写文件引入 UTF-8 BOM → 已剥离（`otool_llm_sdk` 下文件保持无 BOM）。
+
+### WP4 HTTP/TLS/cancel（进行中）
+
+- `http_stream.c` 已实现：`esp_http_client` + `esp_crt_bundle_attach`、connect 阶段用 `connect_timeout_ms` 并在 `HTTP_EVENT_ON_CONNECTED` 切换 `read_timeout_ms`、Content-Type 校验（`text/event-stream` 前缀）、非 2xx 有界错误体（超限告警不截断静默）、`x-request-id`/`Retry-After` 头收集、取消经 `esp_http_client_close()`（决策见 WP1）、`buffer_size_tx` 覆盖请求体上限、请求体/Authorization 不进日志。
+- 待办：本地可控 SSE server 测试（任意 chunk、慢响应、提前断开、401/429/500、错误 JSON、取消），随后公网 smoke test。
+
+### 待办与风险
+
+- 旧 Key 轮换（用户操作，见 WP0）；
+- WP5 live smoke 需要运行时临时凭证（OpenAI 与方舟各一）；
+- `test_apps/parser_and_adapters` 的 ESP-IDF Unity 版待建（当前宿主测试先行，计划允许"至少 Unity 通过"）；

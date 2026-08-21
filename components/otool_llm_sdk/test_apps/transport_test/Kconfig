@@ -1,0 +1,15 @@
+menu "otool_llm_sdk transport test"
+
+config OTOOL_LLM_TEST_SERVER_HOST
+    string "Local SSE test server host"
+    default "localhost"
+    help
+        Host of local_sse_server.py. Use "localhost" on the linux target;
+        use the PC's LAN IP when running on a device.
+
+config OTOOL_LLM_TEST_SERVER_PORT
+    int "Local SSE test server port"
+    default 18080
+    range 1 65535
+
+endmenu

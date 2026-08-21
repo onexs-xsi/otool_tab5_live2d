@@ -1,16 +1,59 @@
 menu "otool_llm_sdk"
 
-config OTOOL_LLM_ENDPOINT_URL
-    string "LLM streaming endpoint URL"
-    default "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+config OTOOL_LLM_MAX_REQUEST_BYTES
+    int "Maximum serialized JSON request body size (bytes)"
+    default 32768
+    range 1024 262144
     help
-        OpenAI-compatible chat completions endpoint used for streaming.
+        Hard cap for the request body built by cJSON. Exceeding it returns
+        OTOOL_LLM_ERR_REQUEST_TOO_LARGE; there is no silent truncation.
 
-config OTOOL_LLM_RECV_TIMEOUT_MS
-    int "LLM HTTP receive timeout (ms)"
-    default 60000
+config OTOOL_LLM_MAX_SSE_EVENT_BYTES
+    int "Maximum merged SSE event data size (bytes)"
+    default 16384
+    range 512 131072
+    help
+        Hard cap for one merged SSE data payload (multiple data: lines joined
+        with newline) and for any single SSE line. Exceeding it returns
+        OTOOL_LLM_ERR_EVENT_TOO_LARGE.
+
+config OTOOL_LLM_MAX_ERROR_BODY_BYTES
+    int "Maximum non-2xx error body size (bytes)"
+    default 4096
+    range 256 32768
+    help
+        Bounded error body captured for the provider error parser. If the body
+        is larger, the prefix is kept and a warning is logged.
+
+config OTOOL_LLM_HTTP_RX_BUFFER_BYTES
+    int "HTTP receive chunk buffer size (bytes)"
+    default 2048
+    range 256 16384
+    help
+        esp_http_client receive buffer size. Network chunks are fed to the SSE
+        parser at arbitrary boundaries.
+
+config OTOOL_LLM_CONNECT_TIMEOUT_MS
+    int "Default connect timeout (ms)"
+    default 15000
     range 1000 300000
     help
-        Timeout for receiving streamed LLM chunks.
+        Default connect timeout used when otool_llm_client_config_t leaves
+        connect_timeout_ms <= 0.
+
+config OTOOL_LLM_READ_TIMEOUT_MS
+    int "Default stream read timeout (ms)"
+    default 60000
+    range 1000 600000
+    help
+        Default read timeout between stream chunks, used when
+        otool_llm_client_config_t leaves read_timeout_ms <= 0.
+
+config OTOOL_LLM_ALLOW_INSECURE_HTTP
+    bool "Allow plain HTTP (insecure, local testing only)"
+    default n
+    help
+        When disabled, client base URLs must start with https:// and TLS with
+        the certificate bundle is enforced. Enable only for local test servers.
 
 endmenu

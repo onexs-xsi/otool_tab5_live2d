@@ -1,6 +1,7 @@
 ## IDF Component Manager Manifest File
-description: otool LLM SDK for streaming chat completions (OpenAI-compatible SSE)
-version: "0.1.0"
+description: otool LLM SDK - streaming text (Responses API + Chat Completions SSE) with provider presets, bounded SSE parser and cross-task cancel
+version: "0.2.0"
 dependencies:
   idf:
     version: ">=6.1.0"
+  espressif/cjson: "^1.7.19~2"

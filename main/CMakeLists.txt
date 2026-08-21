@@ -10,10 +10,5 @@ idf_component_register(
         nvs_flash
 )
 
-# 豆包大模型 API Key
-# 注意：此密钥仅用于本地开发，请勿提交到公开仓库。
-set(DOUBAO_API_KEY "OTOOL_LLM_API_KEY_FROM_SDKCONFIG")
-
-target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    DOUBAO_API_KEY="\"${DOUBAO_API_KEY}\""
-)
+# API Key 不再编译进固件（WP0 安全清理，见 docs/otool_llm_sdk_streaming_voice_implementation_plan.md §8.3）。
+# 运行时由应用通过 otool_llm_client_config_t.api_key 或 NVS 注入。
