@@ -104,6 +104,13 @@ idf_component_register(
     EMBED_FILES ${OTOOL_ESP_HOSTED_FW_UPDATE_EMBED_FILES}
 )
 
+# esp_console_cmd_t 在 IDF 6.1 新增 func_w_context/context 字段，
+# 组件内 legacy designated initializer 未覆盖 -> 豁免 missing-field-initializers
+# （与参考工程对 main 组件的处理一致）
+target_compile_options(__idf_otool_esp_hosted_fw_update PRIVATE
+    -Wno-error=missing-field-initializers
+)
+
 # esp_wifi_default_config.h 的 CONFIG_WIFI_RMT_* 宏依赖 CONFIG_SLAVE_IDF_TARGET_*
 # 当 sdkconfig 未启用 esp_wifi_remote（IS_DISABLED=y）时这些宏不会被生成，
 # 需要手动指定协处理器目标为 ESP32-C6。

@@ -12,6 +12,7 @@
 #include "sdkconfig.h"
 
 #include "llm_app.h"
+#include "console_cmds.h"
 
 static const char *TAG = "main";
 
@@ -70,4 +71,7 @@ extern "C" void app_main(void)
 
     // 联网 + LLM 对话
     llm_app_start(&g_comp);
+
+    // USB-Serial-JTAG 命令行（help / wifi / llm / fw / free / version）
+    console_start();
 }

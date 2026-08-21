@@ -45,6 +45,7 @@ static char s_reply_buf[REPLY_BUF_CAP];
 static size_t s_reply_len = 0;
 static bool s_reply_truncated = false;
 static char s_last_error[192] = { 0 };
+static char s_hint[128] = { 0 };
 static volatile bool s_request_busy = false;
 static SemaphoreHandle_t s_reply_lock = nullptr;
 
@@ -54,6 +55,8 @@ static void reply_reset(void)
         s_reply_len = 0;
         s_reply_buf[0] = '\0';
         s_reply_truncated = false;
+        s_last_error[0] = '\0';
+        s_hint[0] = '\0';
         xSemaphoreGive(s_reply_lock);
     }
 }
@@ -79,6 +82,53 @@ static void reply_set_error(const char *message)
 {
     if (xSemaphoreTake(s_reply_lock, portMAX_DELAY) == pdTRUE) {
         snprintf(s_last_error, sizeof(s_last_error), "%s", message);
+        xSemaphoreGive(s_reply_lock);
+    }
+}
+
+static void reply_clear_error(void)
+{
+    if (xSemaphoreTake(s_reply_lock, portMAX_DELAY) == pdTRUE) {
+        s_last_error[0] = '\0';
+        xSemaphoreGive(s_reply_lock);
+    }
+}
+
+/* ---------------- console / UI 控制入口 ---------------- */
+
+extern "C" void llm_app_ask_now(void)
+{
+    if (s_trigger_sem != nullptr) {
+        xSemaphoreGive(s_trigger_sem);
+    }
+}
+
+extern "C" void llm_app_cancel_now(void)
+{
+    if (xSemaphoreTake(s_request_lock, portMAX_DELAY) == pdTRUE) {
+        if (s_active_request != nullptr) {
+            otool_llm_request_cancel(s_active_request);
+        }
+        xSemaphoreGive(s_request_lock);
+    }
+}
+
+extern "C" void llm_app_status_str(char *buf, size_t size)
+{
+    if (xSemaphoreTake(s_reply_lock, portMAX_DELAY) == pdTRUE) {
+        snprintf(buf, size, "round=%d busy=%d reply_len=%u err=%s", s_round,
+                 (int)s_request_busy, (unsigned)s_reply_len,
+                 s_last_error[0] ? s_last_error : "-");
+        xSemaphoreGive(s_reply_lock);
+    } else {
+        snprintf(buf, size, "status unavailable");
+    }
+}
+
+extern "C" void llm_app_set_hint(const char *text)
+{
+    if (xSemaphoreTake(s_reply_lock, portMAX_DELAY) == pdTRUE) {
+        snprintf(s_hint, sizeof(s_hint), "%s", text ? text : "");
         xSemaphoreGive(s_reply_lock);
     }
 }
@@ -324,6 +374,9 @@ static void ui_timer_cb(lv_timer_t *timer)
         } else {
             snprintf(s_status_text, sizeof(s_status_text), "round %d | LLM idle | tap to ask",
                      s_round);
+        }
+        if (s_hint[0] != '\0') {
+            lv_label_set_text(s_hint_label, s_hint);
         }
         lv_label_set_text(s_status_label, s_status_text);
         lv_label_set_text(s_reply_label, s_reply_buf);

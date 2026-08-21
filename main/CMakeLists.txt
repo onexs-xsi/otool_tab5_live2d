@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "main.cpp" "llm_app.cpp"
+    SRCS "main.cpp" "llm_app.cpp" "console_cmds.cpp"
     INCLUDE_DIRS "."
     REQUIRES
         otool_dev_autodetect
@@ -14,6 +14,7 @@ idf_component_register(
         esp_netif
         esp_wifi
         esp_event
+        console
 )
 
 # API Key 不再编译进固件（WP0 安全清理，见 docs/otool_llm_sdk_streaming_voice_implementation_plan.md §8.3）。

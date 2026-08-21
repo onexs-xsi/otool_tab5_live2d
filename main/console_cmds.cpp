@@ -1,0 +1,189 @@
+// otool_tab5_live2d console: interactive command line over USB-Serial-JTAG.
+// Commands: help, free, version, wifi status/reconnect, llm ask/cancel/status,
+//           fw list/info/flash (ESP-Hosted coprocessor firmware, see otool_esp_hosted_fw_update).
+
+#include "llm_app.h"
+
+#include "esp_console.h"
+#include "esp_log.h"
+#include "esp_netif.h"
+#include "esp_system.h"
+#include "esp_wifi.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "sdkconfig.h"
+#include "otool_esp_hosted_fw_console.h"
+
+#include <cstdio>
+#include <cstring>
+
+#ifdef CONFIG_OTOOL_ESP_HOSTED_FW_ENABLE_CONSOLE_CMDS
+#include "esp_hosted.h"
+#endif
+
+static const char *TAG = "console";
+
+/* ---------------- wifi ---------------- */
+
+static int do_wifi_status(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (sta == nullptr) {
+        printf("wifi: sta netif not found\n");
+        return 1;
+    }
+    esp_netif_ip_info_t ip = {};
+    if (esp_netif_get_ip_info(sta, &ip) == ESP_OK && ip.ip.addr != 0) {
+        printf("wifi: connected ip=" IPSTR "\n", IP2STR(&ip.ip));
+    } else {
+        printf("wifi: not connected\n");
+    }
+    wifi_ap_record_t ap = {};
+    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+        printf("wifi: ssid=%s rssi=%d channel=%d\n", (const char *)ap.ssid, ap.rssi, ap.primary);
+    }
+    return 0;
+}
+
+static int do_wifi_reconnect(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    esp_err_t err = esp_wifi_disconnect();
+    if (err != ESP_OK) {
+        printf("wifi: disconnect: %s\n", esp_err_to_name(err));
+    }
+    vTaskDelay(pdMS_TO_TICKS(200));
+    err = esp_wifi_connect();
+    printf("wifi: connect -> %s\n", esp_err_to_name(err));
+    return 0;
+}
+
+/* ---------------- llm ---------------- */
+
+static int do_llm_ask(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    llm_app_ask_now();
+    printf("llm: ask triggered\n");
+    return 0;
+}
+
+static int do_llm_cancel(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    llm_app_cancel_now();
+    printf("llm: cancel requested\n");
+    return 0;
+}
+
+static int do_llm_status(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    char buf[192];
+    llm_app_status_str(buf, sizeof(buf));
+    printf("llm: %s\n", buf);
+    return 0;
+}
+
+/* ---------------- system helpers ---------------- */
+
+static int do_free(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    printf("free heap: %u bytes, largest block: %u bytes\n",
+           (unsigned)esp_get_free_heap_size(), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    return 0;
+}
+
+static int do_version(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    printf("otool_tab5_live2d %s\n", IDF_VER);
+    return 0;
+}
+
+/* ---------------- init ---------------- */
+
+static void register_commands(void)
+{
+    esp_console_register_help_command();
+
+    esp_console_cmd_t cmd = {};
+
+    cmd.command = "wifi";
+    cmd.help = "wifi status";
+    cmd.func = &do_wifi_status;
+    esp_console_cmd_register(&cmd);
+
+    cmd.command = "wifi-reconnect";
+    cmd.help = "disconnect and reconnect STA";
+    cmd.func = &do_wifi_reconnect;
+    esp_console_cmd_register(&cmd);
+
+    cmd.command = "llm-ask";
+    cmd.help = "trigger a new LLM round";
+    cmd.func = &do_llm_ask;
+    esp_console_cmd_register(&cmd);
+
+    cmd.command = "llm-cancel";
+    cmd.help = "cancel in-flight LLM request";
+    cmd.func = &do_llm_cancel;
+    esp_console_cmd_register(&cmd);
+
+    cmd.command = "llm-status";
+    cmd.help = "LLM worker status";
+    cmd.func = &do_llm_status;
+    esp_console_cmd_register(&cmd);
+
+    cmd.command = "free";
+    cmd.help = "show free heap";
+    cmd.func = &do_free;
+    esp_console_cmd_register(&cmd);
+
+    cmd.command = "version";
+    cmd.help = "show firmware version";
+    cmd.func = &do_version;
+    esp_console_cmd_register(&cmd);
+
+#ifdef CONFIG_OTOOL_ESP_HOSTED_FW_ENABLE_CONSOLE_CMDS
+    esp_err_t err = otool_esp_hosted_fw_console_register_cmds();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "fw console cmds: %s", esp_err_to_name(err));
+    }
+#endif
+}
+
+extern "C" void console_start(void)
+{
+    esp_console_repl_config_t repl_cfg = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
+    repl_cfg.max_cmdline_length = 256;
+    repl_cfg.prompt = "tab5> ";
+
+    esp_console_dev_usb_serial_jtag_config_t dev_cfg = {};
+
+    esp_console_repl_t *repl = nullptr;
+    esp_err_t err = esp_console_new_repl_usb_serial_jtag(&dev_cfg, &repl_cfg, &repl);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "new repl usb_serial_jtag: %s", esp_err_to_name(err));
+        return;
+    }
+
+    register_commands();
+
+#ifdef CONFIG_OTOOL_ESP_HOSTED_FW_ENABLE_CONSOLE_CMDS
+    otool_esp_hosted_fw_console_print_welcome();
+#endif
+
+    err = esp_console_start_repl(repl);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "start repl: %s", esp_err_to_name(err));
+    }
+}
