@@ -160,9 +160,13 @@ static otool_llm_event_action_t llm_on_event(const otool_llm_text_event_t *evt, 
         break;
     case OTOOL_LLM_TEXT_EVENT_TEXT_DELTA:
         reply_append(evt->data.text_delta.data, evt->data.text_delta.data_len);
+        /* 关键信息：流式回复实时打印到 console（stdout = USB-Serial-JTAG） */
+        printf("%.*s", (int)evt->data.text_delta.data_len, evt->data.text_delta.data);
+        fflush(stdout);
         break;
     case OTOOL_LLM_TEXT_EVENT_TEXT_DONE:
-        ESP_LOGI(TAG, "text done");
+        printf("\n");
+        fflush(stdout);
         break;
     case OTOOL_LLM_TEXT_EVENT_USAGE:
         ESP_LOGI(TAG, "usage: in=%lld out=%lld total=%lld",
@@ -182,6 +186,8 @@ static otool_llm_event_action_t llm_on_event(const otool_llm_text_event_t *evt, 
     case OTOOL_LLM_TEXT_EVENT_ERROR:
         ESP_LOGE(TAG, "error: %s (code=%s)", evt->data.error.message ? evt->data.error.message : "?",
                  otool_llm_err_to_name(evt->data.error.code));
+        printf("[llm] error: %s\n", evt->data.error.message ? evt->data.error.message : "?");
+        fflush(stdout);
         reply_set_error(evt->data.error.message ? evt->data.error.message : "llm error");
         break;
     default:
@@ -270,9 +276,14 @@ static void llm_worker_task(void *arg)
         }
 
         ESP_LOGI(TAG, "round %d: ask '%s'", round, question);
+        printf("[llm] round %d ask: %s\n", round, question);
+        fflush(stdout);
         err = otool_llm_request_execute_stream(request, llm_on_event, nullptr);
         ESP_LOGI(TAG, "round %d done: %s, reply_len=%u", round, esp_err_to_name(err),
                  (unsigned)s_reply_len);
+        printf("[llm] round %d done: %s, reply_len=%u bytes\n", round, esp_err_to_name(err),
+               (unsigned)s_reply_len);
+        fflush(stdout);
 
         if (xSemaphoreTake(s_request_lock, portMAX_DELAY) == pdTRUE) {
             s_active_request = nullptr;
