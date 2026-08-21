@@ -928,3 +928,39 @@ Gate：提交 ADR 和最小协议探针；未完成前不把语音代码混入 A
 
 - 循环检测（同一 name+arguments 连续 2 次）与 Chat 工具调用（WP5）未实现；
 - OpenAI 真机工具闭环未测（无凭证）。
+
+### 2026-08-22 — WP6（完成：设备工具 + Agent 应用集成）
+
+改动：
+
+- 新增 `main/agent_app.{h,cpp}`：
+  - 只读设备工具 `get_device_status`（uptime / free heap / Wi-Fi 状态，flags=READ_ONLY）；
+  - agent worker task（**32KB 栈**——16KB 时真机运行栈溢出，`Detected in task "agent_worker"`，已修复）；事件驱动（console `agent <text>` 触发）；
+  - 事件全部流式打印到 console（RUN/TURN/TOOL_CALL/TOOL_EXECUTION/USAGE/RUN_COMPLETED），最终回复累积到共享 buffer 供 UI；
+  - 新 run 自动取消旧 run；`agent-cancel` 仅取消。
+- console 新增 `agent` / `agent-cancel` / `agent-status` 命令；main.cpp 装配 `agent_app_start()`。
+
+真机验证（COM3，Ark Responses + doubao-seed-2-1-turbo-260628）：
+
+```
+[agent] RUN_STARTED
+[agent] TURN_STARTED turn=1
+[agent] TOOL_CALL_STARTED name=get_device_status
+[agent] TOOL_ARGUMENTS_DELTA ×2
+[agent] TOOL_CALL_READY args={}
+[agent] USAGE in=408 out=74
+[agent] TURN_COMPLETED
+[agent] TOOL_EXECUTION_STARTED executing=get_device_status
+[agent] TOOL_EXECUTION_FINISHED result={"ok":true,"result":{"uptime_s":13,"free_heap_bytes":26795056,"wifi_connected":true}}
+[agent] TURN_STARTED turn=2
+[agent] USAGE in=531 out=240
+[agent] TURN_COMPLETED
+[agent] RUN_COMPLETED
+```
+
+中文最终回答逐字流式输出（含真实设备数据）。Gate 达成：真机连续完成"查设备状态 → 工具执行 → 中文最终回答"。
+
+剩余风险：
+
+- 副作用工具的 policy 允许路径未真机演示（get_device_status 为只读，默认允许）；
+- 触摸/UI 触发 agent 尚未接入（当前 console 触发）；
