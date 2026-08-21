@@ -11,6 +11,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "linenoise/linenoise.h"
 #include "sdkconfig.h"
 
 #include <cstdio>
@@ -55,10 +56,25 @@ static int do_wifi_reconnect(int argc, char **argv)
 
 static int do_llm_ask(int argc, char **argv)
 {
-    (void)argc;
-    (void)argv;
-    llm_app_ask_now();
-    printf("llm: ask triggered\n");
+    if (argc > 1) {
+        /* llm-ask <text>：直接使用自定义问题 */
+        llm_app_ask_text(argv[1]);
+        printf("llm: asking: %s\n", argv[1]);
+        return 0;
+    }
+
+    /* llm-ask（无参数）：二次确认后才使用默认问题；回车或 y 确认，其他/Ctrl+C 取消 */
+    char *line = linenoise("Use default question? [y/N] (Enter/y to confirm, Ctrl+C cancels): ");
+    if (line == nullptr) {
+        printf("llm: cancelled (Ctrl+C)\n");
+        return 0;
+    }
+    if (line[0] == '\0' || line[0] == 'y' || line[0] == 'Y') {
+        llm_app_ask_now();
+        printf("llm: asking default question\n");
+    } else {
+        printf("llm: cancelled\n");
+    }
     return 0;
 }
 
@@ -120,7 +136,7 @@ static void register_commands(void)
     esp_console_cmd_register(&cmd);
 
     cmd.command = "llm-ask";
-    cmd.help = "trigger a new LLM round";
+    cmd.help = "ask a question: 'llm-ask <text>'; without text, confirm default (Ctrl+C cancels)";
     cmd.func = &do_llm_ask;
     esp_console_cmd_register(&cmd);
 

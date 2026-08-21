@@ -22,9 +22,13 @@ static const char *TAG = "llm_app";
 
 /* 触摸/命令触发与打断 */
 static SemaphoreHandle_t s_trigger_sem = nullptr;   /* 触发 → 立即提问/打断 */
-static SemaphoreHandle_t s_request_lock = nullptr;  /* 保护 s_active_request */
+static SemaphoreHandle_t s_request_lock = nullptr;  /* 保护 s_active_request / s_pending_question */
 static otool_llm_request_handle_t s_active_request = nullptr;
 static volatile int s_round = 0;
+
+/* 自定义问题（console llm-ask <text> 注入，worker 取用一次后清除） */
+static char s_pending_question[256] = { 0 };
+static bool s_has_pending_question = false;
 
 /* ---------------- 共享回复 buffer（worker 写，UI/console 读） ---------------- */
 
@@ -79,6 +83,22 @@ static void reply_set_error(const char *message)
 
 extern "C" void llm_app_ask_now(void)
 {
+    if (s_trigger_sem != nullptr) {
+        xSemaphoreGive(s_trigger_sem);
+    }
+}
+
+extern "C" void llm_app_ask_text(const char *text)
+{
+    if (text == nullptr || text[0] == '\0') {
+        llm_app_ask_now(); /* 空文本 = 默认问题 */
+        return;
+    }
+    if (xSemaphoreTake(s_request_lock, portMAX_DELAY) == pdTRUE) {
+        snprintf(s_pending_question, sizeof(s_pending_question), "%.255s", text);
+        s_has_pending_question = true;
+        xSemaphoreGive(s_request_lock);
+    }
     if (s_trigger_sem != nullptr) {
         xSemaphoreGive(s_trigger_sem);
     }
@@ -247,7 +267,23 @@ static void llm_worker_task(void *arg)
         }
 
         s_round = round;
-        const char *question = questions[round % (sizeof(questions) / sizeof(questions[0]))];
+
+        /* 取问题：优先自定义（console llm-ask <text>），否则默认轮换 */
+        char custom_question[256] = { 0 };
+        const char *question = nullptr;
+        if (xSemaphoreTake(s_request_lock, portMAX_DELAY) == pdTRUE) {
+            if (s_has_pending_question) {
+                memcpy(custom_question, s_pending_question, sizeof(custom_question));
+                s_has_pending_question = false;
+                s_pending_question[0] = '\0';
+            }
+            xSemaphoreGive(s_request_lock);
+        }
+        if (custom_question[0] != '\0') {
+            question = custom_question;
+        } else {
+            question = questions[round % (sizeof(questions) / sizeof(questions[0]))];
+        }
 
         reply_reset();
         s_request_busy = true;

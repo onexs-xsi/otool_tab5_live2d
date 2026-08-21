@@ -32,6 +32,14 @@ void llm_app_start(void);
 void llm_app_ask_now(void);
 
 /**
+ * @brief Ask a custom question (console entry: "llm-ask <text>").
+ *
+ * The text is queued for the worker; the next trigger uses it instead of the
+ * default rotating question. A new ask_text() replaces any pending one.
+ */
+void llm_app_ask_text(const char *text);
+
+/**
  * @brief Cancel the in-flight LLM request (console entry). Idempotent.
  */
 void llm_app_cancel_now(void);
