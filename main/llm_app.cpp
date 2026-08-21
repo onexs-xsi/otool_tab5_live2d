@@ -103,7 +103,7 @@ extern "C" void llm_app_get_status(llm_app_status_t *out)
         out->round = s_round;
         out->busy = s_request_busy;
         out->reply_len = s_reply_len;
-        snprintf(out->error, sizeof(out->error), "%s", s_last_error);
+        snprintf(out->error, sizeof(out->error), "%.127s", s_last_error);
         xSemaphoreGive(s_reply_lock);
     } else {
         memset(out, 0, sizeof(*out));

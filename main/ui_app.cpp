@@ -8,6 +8,7 @@
 #include "otool_lvgl_port.h"
 #include "lvgl.h"
 
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "sdkconfig.h"
