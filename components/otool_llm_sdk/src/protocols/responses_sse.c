@@ -131,6 +131,14 @@ static esp_err_t responses_on_sse_event(otool_llm_exec_ctx_t *ctx,
                                         const char *event_name,
                                         const char *data, size_t data_len)
 {
+    /* 方舟在 Responses 流末尾也发送 data: [DONE]（OpenAI 官方 Responses 不发送；
+     * 这是 Ark 与 OpenAI 的协议差异，记录于实施计划 §15.6）。
+     * 它只是流结束标记，不作为 JSON 解析，也不伪造完成事件——
+     * 正常终止仍由 response.completed / response.incomplete 决定。 */
+    if (data_len == 6 && memcmp(data, "[DONE]", 6) == 0) {
+        return ESP_OK;
+    }
+
     cJSON *root = cJSON_ParseWithLength(data, data_len);
     if (root == NULL) {
         ESP_LOGE(TAG, "invalid JSON in SSE event '%s'", event_name);

@@ -8,6 +8,7 @@
 #include "otool_llm_sdk.h"
 #include "otool_llm_text.h"
 #include "otool_lvgl_port.h"
+#include "otool_tab5_component.h"
 #include "lvgl.h"
 
 #include "esp_event.h"
@@ -28,6 +29,7 @@ static constexpr EventBits_t WIFI_CONNECTED_BIT = BIT0;
 
 static EventGroupHandle_t s_wifi_events = nullptr;
 static int s_wifi_retries = 0;
+static void *s_tab5_comp = nullptr;
 
 /* ---------------- 共享回复 buffer（worker 写，LVGL timer 读） ---------------- */
 
@@ -105,6 +107,19 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 
 static esp_err_t wifi_sta_start(void)
 {
+    /* C6 模块上电：WLAN_PWR_EN 由 IO 扩展器（ADDR_HIGH 0x44 P0）控制。
+     * 参考 c145_tab5_wifi_module_update_ui_project：先上电并等待 1s 稳定，
+     * 再初始化 ESP-Hosted（SDIO 链路）。 */
+    m5::tab5::otool_tab5_component *comp =
+        (m5::tab5::otool_tab5_component *)s_tab5_comp;
+    if (comp != nullptr) {
+        esp_err_t perr = comp->wlan_power(true);
+        if (perr != ESP_OK) {
+            ESP_LOGW(TAG, "wlan_power(true) failed: %s", esp_err_to_name(perr));
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+
     ESP_LOGI(TAG, "ESP-Hosted minimal init (C6 SDIO)...");
     esp_err_t err = otool_esp_hosted_fw_update_minimal_init();
     if (err != ESP_OK) {
@@ -216,7 +231,7 @@ static void llm_worker_task(void *arg)
         req.model = CONFIG_OTOOL_LLM_MODEL;
         req.messages = &msg;
         req.message_count = 1;
-        req.max_output_tokens = 256;
+        req.max_output_tokens = 1024;
 
         otool_llm_request_handle_t request = nullptr;
         err = otool_llm_request_create(client, &req, &request);
@@ -298,8 +313,9 @@ static void ui_build(void)
 
 /* ---------------- entry ---------------- */
 
-extern "C" void llm_app_start(void)
+extern "C" void llm_app_start(void *tab5_comp)
 {
+    s_tab5_comp = tab5_comp;
     s_wifi_events = xEventGroupCreate();
     s_reply_lock = xSemaphoreCreateMutex();
 

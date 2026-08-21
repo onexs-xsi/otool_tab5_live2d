@@ -48,6 +48,9 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
+# 调试期关闭 brownout 检测（USB 供电瞬时电流导致误复位；量产固件应恢复检测）
+CONFIG_ESP_BROWNOUT_DET=n
+
 # ESP-Hosted（C6 协处理器，SDIO 4-bit，参考 c145_tab5_wifi_module_update_ui_project sdkconfig）
 CONFIG_ESP_HOSTED_ENABLED=y
 CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y

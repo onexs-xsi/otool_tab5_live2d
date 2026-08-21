@@ -69,5 +69,5 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(err);
 
     // 联网 + LLM 对话
-    llm_app_start();
+    llm_app_start(&g_comp);
 }

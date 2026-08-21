@@ -703,6 +703,36 @@ static void test_responses_unknown_events_tolerated(void)
     free(ctx);
 }
 
+static void test_responses_ark_done_marker(void)
+{
+    /* 方舟差异（§15.6）：Responses 流末尾也发 data: [DONE]。
+     * adapter 必须忽略它：不报 JSON 错误、不伪造完成事件。 */
+    otool_llm_protocol_ops_t *ops = (otool_llm_protocol_ops_t *)&otool_llm_protocol_responses;
+    otool_llm_exec_ctx_t *ctx = make_ctx();
+    collector_t col = { 0 };
+    ctx->user_ctx = &col;
+    ctx->emit = collector_emit;
+
+    CHECK(feed_adapter(ops, ctx, "message", "[DONE]") == ESP_OK, "ark [DONE] ignored");
+    CHECK_EQ(col.count, 0);
+    CHECK(!ctx->terminal_sent, "ark [DONE] does not terminate");
+
+    /* [DONE] 到达前先有完整 created → completed 序列仍然正常 */
+    CHECK(feed_adapter(ops, ctx, "response.created",
+                       "{\"type\":\"response.created\",\"response\":{\"id\":\"r\"}}") == ESP_OK,
+          "created");
+    CHECK(feed_adapter(ops, ctx, "response.completed",
+                       "{\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}") ==
+              ESP_OK,
+          "completed");
+    CHECK(feed_adapter(ops, ctx, "message", "[DONE]") == ESP_OK, "trailing [DONE] ignored");
+    CHECK_EQ(col.count, 2);
+    CHECK(ctx->terminal_sent, "terminal from completed");
+
+    free_collector(&col);
+    free(ctx);
+}
+
 static void test_responses_bad_json_and_types(void)
 {
     otool_llm_protocol_ops_t *ops = (otool_llm_protocol_ops_t *)&otool_llm_protocol_responses;
@@ -988,6 +1018,7 @@ int main(void)
     test_responses_incomplete();
     test_responses_failed_and_error_events();
     test_responses_unknown_events_tolerated();
+    test_responses_ark_done_marker();
     test_responses_bad_json_and_types();
     test_responses_on_eof();
 
