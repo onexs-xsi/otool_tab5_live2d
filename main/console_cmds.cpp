@@ -3,6 +3,7 @@
 
 #include "llm_app.h"
 #include "wifi_app.h"
+#include "credential_store.h"
 
 #include "esp_console.h"
 #include "esp_log.h"
@@ -117,6 +118,84 @@ static int do_version(int argc, char **argv)
     return 0;
 }
 
+/* ---------------- cred（运行时凭证，NVS） ---------------- */
+
+static const char *cred_valid_names[] = { "wifi_ssid", "wifi_pass", "llm_key" };
+
+static bool cred_name_valid(const char *name)
+{
+    for (size_t i = 0; i < sizeof(cred_valid_names) / sizeof(cred_valid_names[0]); i++) {
+        if (strcmp(name, cred_valid_names[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void cred_print_masked(const char *name, const char *value)
+{
+    size_t len = strlen(value);
+    if (len == 0) {
+        printf("  %s = <empty>\n", name);
+        return;
+    }
+    if (strcmp(name, "wifi_ssid") == 0 || len <= 4) {
+        printf("  %s = %s\n", name, value);
+        return;
+    }
+    /* 秘密值脱敏：只显示前 4 字符与长度 */
+    printf("  %s = %.*s*** (%u chars)\n", name, 4, value, (unsigned)len);
+}
+
+static int do_cred_set(int argc, char **argv)
+{
+    if (argc < 3) {
+        printf("usage: cred set <name> <value>   (names: wifi_ssid|wifi_pass|llm_key)\n");
+        return 1;
+    }
+    if (!cred_name_valid(argv[1])) {
+        printf("cred: unknown name '%s' (use wifi_ssid|wifi_pass|llm_key)\n", argv[1]);
+        return 1;
+    }
+    esp_err_t err = credential_store_set(argv[1], argv[2]);
+    if (err != ESP_OK) {
+        printf("cred: set failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    printf("cred: %s saved to NVS\n", argv[1]);
+    return 0;
+}
+
+static int do_cred_show(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    for (size_t i = 0; i < sizeof(cred_valid_names) / sizeof(cred_valid_names[0]); i++) {
+        char buf[256];
+        if (credential_store_get(cred_valid_names[i], buf, sizeof(buf)) == ESP_OK) {
+            cred_print_masked(cred_valid_names[i], buf);
+        } else {
+            printf("  %s = <unset>\n", cred_valid_names[i]);
+        }
+    }
+    return 0;
+}
+
+static int do_cred_clear(int argc, char **argv)
+{
+    if (argc < 2 || !cred_name_valid(argv[1])) {
+        printf("usage: cred clear <name>   (names: wifi_ssid|wifi_pass|llm_key)\n");
+        return 1;
+    }
+    esp_err_t err = credential_store_erase(argv[1]);
+    if (err != ESP_OK) {
+        printf("cred: clear failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    printf("cred: %s erased\n", argv[1]);
+    return 0;
+}
+
 /* ---------------- init ---------------- */
 
 static void register_commands(void)
@@ -158,6 +237,21 @@ static void register_commands(void)
     cmd.command = "version";
     cmd.help = "show firmware version";
     cmd.func = &do_version;
+    esp_console_cmd_register(&cmd);
+
+    cmd.command = "cred";
+    cmd.help = "show runtime credentials (masked)";
+    cmd.func = &do_cred_show;
+    esp_console_cmd_register(&cmd);
+
+    cmd.command = "cred-set";
+    cmd.help = "store a credential to NVS: cred-set <wifi_ssid|wifi_pass|llm_key> <value>";
+    cmd.func = &do_cred_set;
+    esp_console_cmd_register(&cmd);
+
+    cmd.command = "cred-clear";
+    cmd.help = "erase a credential: cred-clear <wifi_ssid|wifi_pass|llm_key>";
+    cmd.func = &do_cred_clear;
     esp_console_cmd_register(&cmd);
 }
 

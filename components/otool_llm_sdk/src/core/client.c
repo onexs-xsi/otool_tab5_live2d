@@ -161,12 +161,13 @@ void otool_llm_client_destroy(otool_llm_client_handle_t client)
     bool busy = false;
     if (client->lock != NULL) {
         if (xSemaphoreTake(client->lock, portMAX_DELAY) == pdTRUE) {
-            busy = (client->active != NULL);
+            busy = (client->active != NULL) || (client->request_count > 0);
             xSemaphoreGive(client->lock);
         }
     }
     if (busy) {
-        ESP_LOGE(TAG, "refusing to destroy client while a request is in flight");
+        ESP_LOGE(TAG, "refusing to destroy client: in-flight request or %u live request handle(s)",
+                 (unsigned)client->request_count);
         return;
     }
 

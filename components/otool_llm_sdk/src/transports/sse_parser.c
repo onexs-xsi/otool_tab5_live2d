@@ -35,6 +35,8 @@ struct otool_llm_sse_parser {
                            feed()/finish() call clears them first, so the event's
                            spans stay valid between calls (transport reads them
                            inside the on_sse_event callback) */
+    bool last_was_cr;   /* P0-3: 上一个字节是 CR —— 跨 feed 分片时 CRLF 也要正确识别
+                           （若为 feed 局部变量，"\r" 与 "\n" 跨分片会被当作两行） */
 };
 
 otool_llm_sse_parser_t *otool_llm_sse_parser_create(size_t max_event_bytes)
@@ -196,13 +198,12 @@ otool_llm_sse_feed_result_t otool_llm_sse_parser_feed(otool_llm_sse_parser_t *p,
 
     sse_clear_pending_event(p);
 
-    bool last_was_cr = false;
     for (size_t i = 0; i < len; i++) {
         uint8_t b = bytes[i];
 
-        if (b == '\n' && last_was_cr) {
+        if (b == '\n' && p->last_was_cr) {
             /* CRLF: EOL already processed at the CR. */
-            last_was_cr = false;
+            p->last_was_cr = false;
             *consumed = i + 1;
             continue;
         }
@@ -210,7 +211,7 @@ otool_llm_sse_feed_result_t otool_llm_sse_parser_feed(otool_llm_sse_parser_t *p,
         if (b == '\n' || b == '\r') {
             otool_llm_sse_feed_result_t r = sse_process_line(p, out_event);
             p->line_len = 0;
-            last_was_cr = (b == '\r');
+            p->last_was_cr = (b == '\r');
             *consumed = i + 1;
             if (r != OTOOL_LLM_SSE_FEED_OK) {
                 return r;
@@ -218,7 +219,7 @@ otool_llm_sse_feed_result_t otool_llm_sse_parser_feed(otool_llm_sse_parser_t *p,
             continue;
         }
 
-        last_was_cr = false;
+        p->last_was_cr = false;
         if (p->line_len >= p->max_event_bytes + OTOOL_SSE_LINE_HEADROOM) {
             *consumed = i + 1;
             return OTOOL_LLM_SSE_FEED_ERROR; /* single line over the hard cap */

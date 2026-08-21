@@ -14,6 +14,7 @@
 #include "llm_app.h"
 #include "wifi_app.h"
 #include "ui_app.h"
+#include "credential_store.h"
 #include "console_cmds.h"
 
 static const char *TAG = "main";
@@ -70,6 +71,9 @@ extern "C" void app_main(void)
     // 初始化 LVGL 端口 + 显示 + 触摸（逻辑分辨率 1280x720）
     err = g_comp.lvgl_init();
     ESP_ERROR_CHECK(err);
+
+    // 运行时凭证（NVS；Wi-Fi 密码与 LLM Key 不编译进固件）
+    ESP_ERROR_CHECK(credential_store_init());
 
     // 联网（C6 Wi-Fi，独立模块 wifi_app）
     ESP_ERROR_CHECK(wifi_app_start(&g_comp));

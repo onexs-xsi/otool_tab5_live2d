@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "main.cpp" "llm_app.cpp" "wifi_app.cpp" "ui_app.cpp" "console_cmds.cpp"
+    SRCS "credential_store.cpp" "main.cpp" "llm_app.cpp" "wifi_app.cpp" "ui_app.cpp" "console_cmds.cpp"
     INCLUDE_DIRS "."
     EMBED_FILES
         "fonts/noto_cn_fonts/noto_zh_mid_24.bin"

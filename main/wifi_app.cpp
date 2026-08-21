@@ -2,6 +2,7 @@
 // Depends only on managed components espressif__esp_hosted + espressif__esp_wifi_remote.
 
 #include "wifi_app.h"
+#include "credential_store.h"
 
 #include "otool_tab5_component.h"
 
@@ -126,10 +127,14 @@ esp_err_t wifi_app_start(void *tab5_comp)
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, nullptr);
 
     wifi_config_t wifi_config = {};
-    snprintf((char *)wifi_config.sta.ssid, sizeof(wifi_config.sta.ssid), "%s", CONFIG_OTOOL_WIFI_SSID);
+    snprintf((char *)wifi_config.sta.ssid, sizeof(wifi_config.sta.ssid), "%s",
+             credential_wifi_ssid());
     snprintf((char *)wifi_config.sta.password, sizeof(wifi_config.sta.password), "%s",
-             CONFIG_OTOOL_WIFI_PASSWORD);
+             credential_wifi_password());
     wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    if (wifi_config.sta.password[0] == '\0') {
+        ESP_LOGW(TAG, "wifi password not set in NVS; run 'cred set wifi_pass <password>'");
+    }
     err = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_set_config: %s", esp_err_to_name(err));

@@ -1,14 +1,19 @@
 menu "otool_tab5_live2d app"
 
 config OTOOL_WIFI_SSID
-    string "Wi-Fi SSID"
+    string "Wi-Fi SSID (fallback; runtime value from NVS takes precedence)"
     default "xiaomibe72"
     help
         STA SSID to connect to after ESP-Hosted (C6) init.
+        credential_store (NVS) overrides this at runtime: 'cred set wifi_ssid <name>'.
 
 config OTOOL_WIFI_PASSWORD
-    string "Wi-Fi password"
-    default "1234567890"
+    string "Wi-Fi password (placeholder; real value must be set via NVS)"
+    default ""
+    help
+        WP0: 真实密码不写入仓库/固件。运行时通过 console 注入并持久化到 NVS：
+            cred set wifi_pass <password>
+        NVS 未设置时为空，设备无法连接 Wi-Fi。
 
 config OTOOL_WIFI_MAX_RETRY
     int "Wi-Fi connect max retries"

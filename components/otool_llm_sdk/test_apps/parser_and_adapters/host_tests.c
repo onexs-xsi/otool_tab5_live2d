@@ -415,6 +415,40 @@ static void test_sse_eof_half_event(void)
     otool_llm_sse_parser_destroy(p);
 }
 
+static void test_sse_crlf_across_feed_boundary(void)
+{
+    /* P0-3 回归：CR 与 LF 跨 feed 分片时必须等价于单次喂入的 CRLF。
+     * 流以空行结束（两个事件均已 dispatch），finish 必须干净。 */
+    const char *stream = "data: hello\r\n\r\ndata: world\r\n\r\n";
+    size_t len = strlen(stream);
+    for (size_t split = 0; split <= len; split++) {
+        captured_event_t e1[4], e2[4];
+        otool_llm_sse_parser_t *whole = otool_llm_sse_parser_create(16384);
+        int n1 = feed_all(whole, stream, e1, 4);
+        CHECK(otool_llm_sse_parser_finish(whole) == ESP_OK, "whole clean finish");
+        otool_llm_sse_parser_destroy(whole);
+
+        otool_llm_sse_parser_t *split_p = otool_llm_sse_parser_create(16384);
+        int n2 = 0;
+        if (split > 0) {
+            char *part = (char *)malloc(split + 1);
+            memcpy(part, stream, split);
+            part[split] = '\0';
+            n2 = feed_all(split_p, part, e2, 4);
+            free(part);
+        }
+        n2 += feed_all(split_p, stream + split, e2 + n2, 4 - n2);
+        esp_err_t finish_ret = otool_llm_sse_parser_finish(split_p);
+        otool_llm_sse_parser_destroy(split_p);
+
+        CHECK_EQ(n1, n2);
+        for (int i = 0; i < n1 && i < n2; i++) {
+            CHECK_STR(e1[i].data, e2[i].data);
+        }
+        CHECK(finish_ret == ESP_OK, "split finish must be clean at split %d", (int)split);
+    }
+}
+
 static void test_sse_crlf_mixed(void)
 {
     otool_llm_sse_parser_t *p = otool_llm_sse_parser_create(16384);
@@ -1013,6 +1047,7 @@ int main(void)
     test_sse_cap_and_overflow();
     test_sse_eof_half_event();
     test_sse_crlf_mixed();
+    test_sse_crlf_across_feed_boundary();
 
     test_responses_happy_path();
     test_responses_incomplete();

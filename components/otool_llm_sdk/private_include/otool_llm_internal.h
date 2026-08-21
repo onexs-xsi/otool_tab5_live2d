@@ -33,6 +33,7 @@ struct otool_llm_client {
     int read_timeout_ms;
     SemaphoreHandle_t lock;
     otool_llm_request_handle_t active;  /**< In-flight request or NULL */
+    uint32_t request_count;             /**< 存活的 request handle 数（生命周期保护，P1） */
 };
 
 struct otool_llm_request {

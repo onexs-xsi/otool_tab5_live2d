@@ -27,15 +27,18 @@ static const char *TAG = "otool_llm_request";
 
 /* ---------------- cancel coordination ---------------- */
 
-static esp_err_t request_cancel_locked(otool_llm_request_handle_t request)
+/* P0-2: 跨任务取消只关闭当前 socket（esp_http_client_close），
+ * 不使用 esp_http_client_cancel_request()——其 IDF 实现会关闭后重新 connect，
+ * 可能重发 POST（计划 §7.1 禁止自动重试）。
+ * 不持锁执行 close（阻塞操作放锁外）：锁内仅置标志并摘走 handle。 */
+static esp_err_t request_cancel_locked(otool_llm_request_handle_t request,
+                                       esp_http_client_handle_t *out_http)
 {
     /* caller holds request->lock */
     request->cancel_requested = true;
-    if (request->http != NULL) {
-        esp_err_t err = esp_http_client_cancel_request(request->http);
-        if (err != ESP_OK) {
-            ESP_LOGD(TAG, "esp_http_client_cancel_request: %s", esp_err_to_name(err));
-        }
+    if (out_http != NULL) {
+        *out_http = request->http;
+        request->http = NULL; /* 摘走：执行任务清理时不再重复 close */
     }
     return ESP_OK;
 }
@@ -48,11 +51,20 @@ esp_err_t otool_llm_request_cancel(otool_llm_request_handle_t request)
     if (xSemaphoreTake(request->lock, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_INVALID_STATE;
     }
+    esp_http_client_handle_t http = NULL;
     esp_err_t err = ESP_OK;
     if (request->executing) {
-        err = request_cancel_locked(request);
+        err = request_cancel_locked(request, &http);
     }
     xSemaphoreGive(request->lock);
+
+    if (http != NULL) {
+        /* 锁外关闭：仅断开当前连接，不重连、不重发请求 */
+        esp_err_t cerr = esp_http_client_close(http);
+        if (cerr != ESP_OK) {
+            ESP_LOGD(TAG, "esp_http_client_close: %s", esp_err_to_name(cerr));
+        }
+    }
     return err;
 }
 
@@ -86,9 +98,13 @@ static esp_err_t exec_emit(otool_llm_exec_ctx_t *ctx, const otool_llm_text_event
         if (action == OTOOL_LLM_EVENT_ACTION_CANCEL) {
             ctx->cancel_requested = true;
             otool_llm_request_handle_t req = (otool_llm_request_handle_t)ctx->request_owner;
+            esp_http_client_handle_t http = NULL;
             if (req != NULL && xSemaphoreTake(req->lock, portMAX_DELAY) == pdTRUE) {
-                request_cancel_locked(req);
+                request_cancel_locked(req, &http);
                 xSemaphoreGive(req->lock);
+            }
+            if (http != NULL) {
+                esp_http_client_close(http); /* 锁外关闭，不重连 */
             }
         }
     }
@@ -249,6 +265,12 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
         return ESP_ERR_NO_MEM;
     }
 
+    /* 生命周期保护：client 存活期间 request handle 计数（P1） */
+    if (xSemaphoreTake(client->lock, portMAX_DELAY) == pdTRUE) {
+        client->request_count++;
+        xSemaphoreGive(client->lock);
+    }
+
     *out_request = r;
     return ESP_OK;
 }
@@ -267,6 +289,14 @@ void otool_llm_request_destroy(otool_llm_request_handle_t request)
         return;
     }
     xSemaphoreGive(request->lock);
+
+    /* 生命周期保护：释放 client 上的 request 计数（P1） */
+    if (xSemaphoreTake(request->client->lock, portMAX_DELAY) == pdTRUE) {
+        if (request->client->request_count > 0) {
+            request->client->request_count--;
+        }
+        xSemaphoreGive(request->client->lock);
+    }
 
     for (size_t i = 0; i < request->message_count; i++) {
         free((void *)request->messages[i].text);
@@ -339,6 +369,7 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
     ctx->emit = exec_emit;
 
     esp_err_t err = ESP_OK;
+    char *url = NULL; /* 声明于顶部：out_error_local 路径可能跳过分配点 */
 
     /* 1. Serialize the request body into a bounded buffer. */
     size_t body_cap = CONFIG_OTOOL_LLM_MAX_REQUEST_BYTES;
@@ -364,7 +395,7 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
         err = ESP_ERR_INVALID_ARG;
         goto out_error_local;
     }
-    char *url = (char *)malloc(strlen(client->base_url) + strlen(path) + 1);
+    url = (char *)malloc(strlen(client->base_url) + strlen(path) + 1);
     if (url == NULL) {
         err = ESP_ERR_NO_MEM;
         goto out_error_local;
@@ -421,6 +452,10 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
             otool_llm_exec_report_error(ctx, err, esp_err_to_name(err), NULL);
             err = ctx->error_code;
         }
+    } else if (ctx->error_code != 0) {
+        /* Terminal was an ERROR: the return value must carry the real error code
+         * (plan §12: terminal ERROR code == API return value). */
+        err = ctx->error_code;
     } else {
         err = ESP_OK;
     }
@@ -430,10 +465,11 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
     goto out;
 
 out_error_local:
-    /* Local failure (OOM, request too large, bad URL): emit a terminal ERROR. */
+    /* Local failure (OOM, request too large, bad URL, auth build): emit a terminal ERROR. */
     if (!ctx->terminal_sent) {
         otool_llm_exec_report_error(ctx, err, esp_err_to_name(err), NULL);
     }
+    free(url);
     free(body);
     err = ctx->error_code != 0 ? ctx->error_code : err;
 

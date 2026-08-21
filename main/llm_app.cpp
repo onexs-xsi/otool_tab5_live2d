@@ -5,6 +5,7 @@
 
 #include "llm_app.h"
 #include "wifi_app.h"
+#include "credential_store.h"
 
 #include "otool_llm_sdk.h"
 #include "otool_llm_text.h"
@@ -227,11 +228,19 @@ static void llm_worker_task(void *arg)
         return;
     }
 
+    /* 运行时凭证（NVS，console 'cred set llm_key <key>'） */
+    const char *api_key = credential_llm_key();
+    if (api_key == nullptr || api_key[0] == '\0') {
+        ESP_LOGE(TAG, "llm api key not set; run 'cred set llm_key <key>' then reboot");
+        vTaskDelete(nullptr);
+        return;
+    }
+
     otool_llm_client_config_t cfg = {};
     cfg.struct_size = sizeof(cfg);
     cfg.provider = OTOOL_LLM_PROVIDER_VOLCENGINE_ARK;
     cfg.protocol = OTOOL_LLM_PROTOCOL_AUTO;
-    cfg.api_key = CONFIG_OTOOL_LLM_API_KEY;
+    cfg.api_key = api_key;
     cfg.connect_timeout_ms = 15000;
     cfg.read_timeout_ms = 60000;
 
