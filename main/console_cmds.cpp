@@ -1,6 +1,5 @@
 // otool_tab5_live2d console: interactive command line over USB-Serial-JTAG.
-// Commands: help, free, version, wifi status/reconnect, llm ask/cancel/status,
-//           fw list/info/flash (ESP-Hosted coprocessor firmware, see otool_esp_hosted_fw_update).
+// Commands: help, free, version, wifi status/reconnect, llm ask/cancel/status.
 
 #include "llm_app.h"
 
@@ -12,14 +11,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
-#include "otool_esp_hosted_fw_console.h"
 
 #include <cstdio>
 #include <cstring>
-
-#ifdef CONFIG_OTOOL_ESP_HOSTED_FW_ENABLE_CONSOLE_CMDS
-#include "esp_hosted.h"
-#endif
 
 static const char *TAG = "console";
 
@@ -152,13 +146,6 @@ static void register_commands(void)
     cmd.help = "show firmware version";
     cmd.func = &do_version;
     esp_console_cmd_register(&cmd);
-
-#ifdef CONFIG_OTOOL_ESP_HOSTED_FW_ENABLE_CONSOLE_CMDS
-    esp_err_t err = otool_esp_hosted_fw_console_register_cmds();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "fw console cmds: %s", esp_err_to_name(err));
-    }
-#endif
 }
 
 extern "C" void console_start(void)
@@ -177,10 +164,6 @@ extern "C" void console_start(void)
     }
 
     register_commands();
-
-#ifdef CONFIG_OTOOL_ESP_HOSTED_FW_ENABLE_CONSOLE_CMDS
-    otool_esp_hosted_fw_console_print_welcome();
-#endif
 
     err = esp_console_start_repl(repl);
     if (err != ESP_OK) {

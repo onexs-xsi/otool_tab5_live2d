@@ -4,7 +4,6 @@
 
 #include "llm_app.h"
 
-#include "otool_esp_hosted_fw_update.h"
 #include "otool_llm_sdk.h"
 #include "otool_llm_text.h"
 #include "otool_lvgl_port.h"
@@ -164,8 +163,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 static esp_err_t wifi_sta_start(void)
 {
     /* C6 模块上电：WLAN_PWR_EN 由 IO 扩展器（ADDR_HIGH 0x44 P0）控制。
-     * 参考 c145_tab5_wifi_module_update_ui_project：先上电并等待 1s 稳定，
-     * 再初始化 ESP-Hosted（SDIO 链路）。 */
+     * 先上电并等待 1s 稳定，再初始化 ESP-Hosted（SDIO 链路）。
+     * Wi-Fi 仅依赖 managed 组件 espressif__esp_hosted + espressif__esp_wifi_remote。 */
     m5::tab5::otool_tab5_component *comp =
         (m5::tab5::otool_tab5_component *)s_tab5_comp;
     if (comp != nullptr) {
@@ -176,10 +175,54 @@ static esp_err_t wifi_sta_start(void)
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
-    ESP_LOGI(TAG, "ESP-Hosted minimal init (C6 SDIO)...");
-    esp_err_t err = otool_esp_hosted_fw_update_minimal_init();
+    ESP_LOGI(TAG, "ESP-Hosted init (C6 SDIO)...");
+
+    /* 基础网络栈（nvs_flash_init 已在 app_main 完成） */
+    esp_err_t err = esp_netif_init();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "esp_netif_init: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = esp_event_loop_create_default();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "esp_event_loop_create_default: %s", esp_err_to_name(err));
+        return err;
+    }
+    esp_netif_create_default_wifi_sta();
+
+    /* esp_wifi_init 由 esp_wifi_remote 路由到 C6（esp_hosted SDIO 链路） */
+    wifi_init_config_t wcfg = WIFI_INIT_CONFIG_DEFAULT();
+    wcfg.dynamic_rx_buf_num = 48;
+    wcfg.dynamic_tx_buf_num = 48;
+    wcfg.static_rx_buf_num = 16;
+    err = esp_wifi_init(&wcfg);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "esp_wifi_init: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    err = esp_wifi_set_storage(WIFI_STORAGE_RAM);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "hosted minimal init failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "esp_wifi_set_storage: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_mode: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    wifi_country_t country = {};
+    country.cc[0] = 'C';
+    country.cc[1] = 'N';
+    country.cc[2] = 0;
+    country.schan = 1;
+    country.nchan = 13;
+    country.max_tx_power = 20;
+    country.policy = WIFI_COUNTRY_POLICY_AUTO;
+    err = esp_wifi_set_country(&country);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_country: %s", esp_err_to_name(err));
         return err;
     }
 
@@ -191,13 +234,19 @@ static esp_err_t wifi_sta_start(void)
     snprintf((char *)wifi_config.sta.password, sizeof(wifi_config.sta.password), "%s",
              CONFIG_OTOOL_WIFI_PASSWORD);
     wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-
     err = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_wifi_set_config failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "esp_wifi_set_config: %s", esp_err_to_name(err));
         return err;
     }
-    return esp_wifi_start();
+
+    err = esp_wifi_start();
+    if (err != ESP_OK && err != ESP_ERR_WIFI_MODE) {
+        ESP_LOGE(TAG, "esp_wifi_start: %s", esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "ESP-Hosted init done, STA start");
+    return ESP_OK;
 }
 
 /* ---------------- LLM worker ---------------- */
