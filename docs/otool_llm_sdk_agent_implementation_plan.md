@@ -963,4 +963,28 @@ Gate：提交 ADR 和最小协议探针；未完成前不把语音代码混入 A
 剩余风险：
 
 - 副作用工具的 policy 允许路径未真机演示（get_device_status 为只读，默认允许）；
-- 触摸/UI 触发 agent 尚未接入（当前 console 触发）；
+- 触摸/UI 触发 agent 尚未接入（当前 console 触发）。
+
+### 2026-08-22 — WP5（完成：Chat 工具调用 + 本地 transcript）
+
+改动：
+
+- `include/otool_llm_text.h`：消息结构扩展 `OTOOL_LLM_ROLE_TOOL` + `tool_calls[]/tool_call_count/tool_call_id`；新增 `otool_llm_tool_call_msg_t`；
+- `src/protocols/chat_completions_sse.c`：
+  - 请求序列化：`tools[].function`（name/description/parameters/strict）、assistant 消息 `tool_calls[]`、`role:"tool"` 消息（tool_call_id + content）；
+  - 流式解析：`delta.tool_calls[]` 按 index 聚合（id/name/arguments 分片），`finish_reason=tool_calls` 不终止；`[DONE]` 时对 active 槽补发 `TOOL_CALL_DONE` 再 COMPLETED（Chat 无独立 done 事件）；
+- `src/agent/agent.c`：`LOCAL_TRANSCRIPT` 模式（`state_mode` 选择）：
+  - 有界本地 transcript（≤8 条：user/assistant(tool_calls)/tool/assistant 文本），每轮重建 messages；
+  - 工具轮：assistant tool_calls 消息 + tool 结果消息成对入 transcript；最终轮：assistant 文本入 transcript；
+- `src/core/request.c`：消息深拷贝支持 tool_calls/tool_call_id（统一 `request_messages_free` 释放）；Chat 协议仅拒绝 Responses 专属字段（previous_response_id/store/tool_outputs），允许 tools。
+
+验证：
+
+- host 测试新增：Chat 流式工具调用（started/args 分片/[DONE] 补发 done/completed）、Chat 工具请求序列化（tools/assistant tool_calls/tool role）；`1386 checks, 0 failures`；
+- agent host 测试新增 LOCAL_TRANSCRIPT 闭环（fake Chat 事件脚本：工具调用 → transcript 消息回传 → 最终回答）；`32 checks, 0 failures`；
+- 固件 `idf.py build` → BUILD OK（0x2edb50）。
+
+剩余风险：
+
+- Chat 协议真机工具闭环未测（Ark Chat 带工具请求需 WP8 live smoke）；
+- transcript 固定 8 条上限，无截断/摘要策略（计划允许 0.4.x 再做）。

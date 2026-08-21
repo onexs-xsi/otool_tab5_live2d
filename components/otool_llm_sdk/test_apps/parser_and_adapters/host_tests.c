@@ -530,6 +530,26 @@ static esp_err_t collector_emit(otool_llm_exec_ctx_t *ctx, const otool_llm_text_
             col->events[col->count].data.incomplete.reason = strdup(evt->data.incomplete.reason);
         }
         break;
+    case OTOOL_LLM_TEXT_EVENT_TOOL_ARGUMENTS_DELTA:
+        col->events[col->count].data.tool_arguments_delta.delta =
+            strdup(evt->data.tool_arguments_delta.delta);
+        break;
+    case OTOOL_LLM_TEXT_EVENT_TOOL_CALL_DONE:
+        if (evt->data.tool_call_done.arguments != NULL) {
+            col->events[col->count].data.tool_call_done.arguments =
+                strdup(evt->data.tool_call_done.arguments);
+        }
+        break;
+    case OTOOL_LLM_TEXT_EVENT_TOOL_CALL_STARTED:
+        if (evt->data.tool_call_started.call_id != NULL) {
+            col->events[col->count].data.tool_call_started.call_id =
+                strdup(evt->data.tool_call_started.call_id);
+        }
+        if (evt->data.tool_call_started.name != NULL) {
+            col->events[col->count].data.tool_call_started.name =
+                strdup(evt->data.tool_call_started.name);
+        }
+        break;
     default:
         break;
     }
@@ -553,6 +573,16 @@ static void free_collector(collector_t *col)
             break;
         case OTOOL_LLM_TEXT_EVENT_INCOMPLETE:
             free((void *)col->events[i].data.incomplete.reason);
+            break;
+        case OTOOL_LLM_TEXT_EVENT_TOOL_ARGUMENTS_DELTA:
+            free((void *)col->events[i].data.tool_arguments_delta.delta);
+            break;
+        case OTOOL_LLM_TEXT_EVENT_TOOL_CALL_DONE:
+            free((void *)col->events[i].data.tool_call_done.arguments);
+            break;
+        case OTOOL_LLM_TEXT_EVENT_TOOL_CALL_STARTED:
+            free((void *)col->events[i].data.tool_call_started.call_id);
+            free((void *)col->events[i].data.tool_call_started.name);
             break;
         default:
             break;
@@ -1261,6 +1291,104 @@ static void test_chat_invalid_json(void)
     free(ctx);
 }
 
+/* ---- WP5: chat tool calling tests ---- */
+
+static void test_chat_tool_call_flow(void)
+{
+    otool_llm_protocol_ops_t *ops = (otool_llm_protocol_ops_t *)&otool_llm_protocol_chat;
+    otool_llm_exec_ctx_t *ctx = make_ctx();
+    collector_t col = { 0 };
+    ctx->user_ctx = &col;
+    ctx->emit = collector_emit;
+
+    /* 首个 chunk：工具 id + name */
+    CHECK(feed_adapter(ops, ctx, "message",
+                       "{\"id\":\"cmpl-1\",\"choices\":[{\"index\":0,"
+                       "\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_9\",\"type\":\"function\","
+                       "\"function\":{\"name\":\"get_weather\",\"arguments\":\"\"}}]},"
+                       "\"finish_reason\":null}]}") == ESP_OK,
+          "tool start");
+    /* started + 空 arguments delta = 2（空 delta 也允许，与 Responses 一致） */
+    CHECK_EQ(col.count, 2);
+    CHECK(col.events[0].type == OTOOL_LLM_TEXT_EVENT_TOOL_CALL_STARTED, "tool started");
+    CHECK_STR(col.events[0].data.tool_call_started.call_id, "call_9");
+    CHECK_STR(col.events[0].data.tool_call_started.name, "get_weather");
+    CHECK(col.events[1].type == OTOOL_LLM_TEXT_EVENT_TOOL_ARGUMENTS_DELTA, "empty args delta");
+    CHECK_EQ(col.events[1].data.tool_arguments_delta.delta_len, 0);
+
+    /* 参数分片 */
+    CHECK(feed_adapter(ops, ctx, "message",
+                       "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,"
+                       "\"function\":{\"arguments\":\"{\\\"city\\\":\\\"\"}}]},"
+                       "\"finish_reason\":null}]}") == ESP_OK,
+          "args 1");
+    CHECK(feed_adapter(ops, ctx, "message",
+                       "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,"
+                       "\"function\":{\"arguments\":\"北京\\\"}\"}}]},"
+                       "\"finish_reason\":null}]}") == ESP_OK,
+          "args 2");
+    CHECK_EQ(col.count, 4);
+    CHECK(col.events[2].type == OTOOL_LLM_TEXT_EVENT_TOOL_ARGUMENTS_DELTA, "args delta");
+    CHECK(col.events[3].type == OTOOL_LLM_TEXT_EVENT_TOOL_ARGUMENTS_DELTA, "args delta 2");
+
+    /* finish_reason=tool_calls + [DONE] → 补发 TOOL_CALL_DONE + COMPLETED */
+    CHECK(feed_adapter(ops, ctx, "message",
+                       "{\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}") ==
+              ESP_OK,
+          "finish tool_calls");
+    CHECK(feed_adapter(ops, ctx, "message", "[DONE]") == ESP_OK, "done");
+    CHECK_EQ(col.count, 6);
+    CHECK(col.events[4].type == OTOOL_LLM_TEXT_EVENT_TOOL_CALL_DONE, "tool done at [DONE]");
+    CHECK_STR(col.events[4].data.tool_call_done.arguments, "{\"city\":\"北京\"}");
+    CHECK_STR(col.events[4].data.tool_call_done.name, "get_weather");
+    CHECK(col.events[5].type == OTOOL_LLM_TEXT_EVENT_COMPLETED, "completed");
+    CHECK(ctx->terminal_sent, "terminal");
+
+    free_collector(&col);
+    free(ctx);
+}
+
+static void test_chat_build_request_with_tools(void)
+{
+    otool_llm_protocol_ops_t *ops = (otool_llm_protocol_ops_t *)&otool_llm_protocol_chat;
+    otool_llm_request_view_t view = make_view();
+    static const otool_llm_tool_definition_t tools[] = {
+        {
+            .struct_size = sizeof(otool_llm_tool_definition_t),
+            .name = "get_weather",
+            .description = "Get weather",
+            .parameters_json_schema =
+                "{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},"
+                "\"required\":[\"city\"],\"additionalProperties\":false}",
+            .strict = true,
+        },
+    };
+    /* assistant tool_calls 消息 + tool 结果消息（LOCAL_TRANSCRIPT 结构） */
+    static const otool_llm_tool_call_msg_t calls[] = {
+        { .id = "call_9", .name = "get_weather", .arguments = "{\"city\":\"北京\"}" },
+    };
+    static otool_llm_text_message_t msgs[] = {
+        { .role = OTOOL_LLM_ROLE_USER, .text = "天气?" },
+        { .role = OTOOL_LLM_ROLE_ASSISTANT, .text = "", .tool_calls = calls,
+          .tool_call_count = 1 },
+        { .role = OTOOL_LLM_ROLE_TOOL, .text = "{\"ok\":true}", .tool_call_id = "call_9" },
+    };
+    view.tools = tools;
+    view.tool_count = 1;
+    view.messages = msgs;
+    view.message_count = 3;
+
+    char buf[8192];
+    size_t len = 0;
+    const otool_llm_provider_preset_t *provider = otool_llm_provider_get(OTOOL_LLM_PROVIDER_OPENAI);
+    CHECK(ops->build_request(&view, provider, buf, sizeof(buf), &len) == ESP_OK, "build chat tools");
+    CHECK(strstr(buf, "\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"get_weather\"") != NULL,
+          "chat tool def");
+    CHECK(strstr(buf, "\"tool_calls\":[{\"id\":\"call_9\",\"type\":\"function\"") != NULL,
+          "assistant tool_calls");
+    CHECK(strstr(buf, "\"role\":\"tool\",\"tool_call_id\":\"call_9\"") != NULL, "tool role msg");
+}
+
 /* ---- provider error parser tests ---- */
 
 static void test_provider_error_parsers(void)
@@ -1370,6 +1498,8 @@ int main(void)
     puts("t:chat_multi"); test_chat_multiple_choices_rejected();
     puts("t:chat_error"); test_chat_error_event_and_done_eof();
     puts("t:chat_badjson"); test_chat_invalid_json();
+    puts("t:chat_tool_flow"); test_chat_tool_call_flow();
+    puts("t:chat_build_tools"); test_chat_build_request_with_tools();
 
     puts("t:provider_err"); test_provider_error_parsers();
     puts("t:provider_auth"); test_provider_auth_headers();

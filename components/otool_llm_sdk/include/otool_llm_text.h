@@ -25,7 +25,17 @@ typedef enum {
     OTOOL_LLM_ROLE_SYSTEM,
     OTOOL_LLM_ROLE_USER,
     OTOOL_LLM_ROLE_ASSISTANT,
+    OTOOL_LLM_ROLE_TOOL,   /**< Tool result message (Chat protocol); tool_call_id must be set */
 } otool_llm_role_t;
+
+/**
+ * @brief One tool call inside an assistant message (Chat protocol, WP5).
+ */
+typedef struct {
+    const char *id;        /**< tool call id (matches the model's call_id) */
+    const char *name;
+    const char *arguments; /**< Complete arguments JSON */
+} otool_llm_tool_call_msg_t;
 
 /**
  * @brief One text message. Strings are only referenced during request_create().
@@ -33,6 +43,10 @@ typedef enum {
 typedef struct {
     otool_llm_role_t role;
     const char *text;
+    /* Chat tool calling (WP5): */
+    const otool_llm_tool_call_msg_t *tool_calls; /**< Assistant message tool calls; NULL = plain */
+    size_t tool_call_count;
+    const char *tool_call_id;  /**< Required when role == OTOOL_LLM_ROLE_TOOL */
 } otool_llm_text_message_t;
 
 /**

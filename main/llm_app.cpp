@@ -297,7 +297,9 @@ static void llm_worker_task(void *arg)
         reply_reset();
         s_request_busy = true;
 
-        otool_llm_text_message_t msg = { .role = OTOOL_LLM_ROLE_USER, .text = question };
+        otool_llm_text_message_t msg = {};
+        msg.role = OTOOL_LLM_ROLE_USER;
+        msg.text = question;
         otool_llm_text_request_t req = {};
         req.struct_size = sizeof(req);
         req.model = CONFIG_OTOOL_LLM_MODEL;

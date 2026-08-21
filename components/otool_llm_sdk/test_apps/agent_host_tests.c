@@ -66,6 +66,7 @@ const char *esp_err_to_name(esp_err_t code)
 
 static int g_fake_turn = 0;              /* 1-based model turn */
 static const otool_llm_text_request_t *g_last_request = NULL; /* 最近一次 create 的请求 */
+static int g_fake_chat = 0;              /* 非 0：Chat 事件脚本（delta.tool_calls） */
 
 esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
                                    const otool_llm_text_request_t *request,
@@ -116,6 +117,48 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
 {
     (void)request;
     g_fake_turn++;
+
+    if (g_fake_chat) {
+        /* Chat 脚本：turn1 tool_calls 流式，turn2 最终回答 */
+        if (g_fake_turn == 1) {
+            otool_llm_text_event_t evt = {};
+            evt.type = OTOOL_LLM_TEXT_EVENT_RESPONSE_STARTED;
+            evt.response_id = "chat_1";
+            cb(&evt, user_ctx);
+
+            evt.type = OTOOL_LLM_TEXT_EVENT_TOOL_CALL_STARTED;
+            evt.data.tool_call_started.call_id = "call_chat";
+            evt.data.tool_call_started.name = "get_device_status";
+            cb(&evt, user_ctx);
+
+            evt.type = OTOOL_LLM_TEXT_EVENT_TOOL_ARGUMENTS_DELTA;
+            evt.data.tool_arguments_delta.delta = "{}";
+            evt.data.tool_arguments_delta.delta_len = 2;
+            cb(&evt, user_ctx);
+
+            evt.type = OTOOL_LLM_TEXT_EVENT_TOOL_CALL_DONE;
+            evt.data.tool_call_done.call_id = "call_chat";
+            evt.data.tool_call_done.name = "get_device_status";
+            evt.data.tool_call_done.arguments = "{}";
+            evt.data.tool_call_done.arguments_len = 2;
+            cb(&evt, user_ctx);
+
+            evt.type = OTOOL_LLM_TEXT_EVENT_COMPLETED;
+            cb(&evt, user_ctx);
+            return ESP_OK;
+        }
+        otool_llm_text_event_t evt = {};
+        evt.type = OTOOL_LLM_TEXT_EVENT_RESPONSE_STARTED;
+        evt.response_id = "chat_2";
+        cb(&evt, user_ctx);
+        evt.type = OTOOL_LLM_TEXT_EVENT_TEXT_DELTA;
+        evt.data.text_delta.data = "状态正常";
+        evt.data.text_delta.data_len = 12;
+        cb(&evt, user_ctx);
+        evt.type = OTOOL_LLM_TEXT_EVENT_COMPLETED;
+        cb(&evt, user_ctx);
+        return ESP_OK;
+    }
 
     if (g_fake_turn == 1) {
         /* turn 1: 模型要调用 get_device_status */
@@ -318,10 +361,79 @@ static void test_agent_limit_and_loop_detection(void)
     (void)0;
 }
 
+static void test_agent_chat_local_transcript(void)
+{
+    /* LOCAL_TRANSCRIPT + Chat 事件脚本：工具结果通过 transcript 消息回传 */
+    otool_llm_tool_registry_handle_t reg = NULL;
+    otool_llm_tool_registry_create(&reg);
+    otool_llm_tool_definition_t tool = {};
+    tool.struct_size = sizeof(tool);
+    tool.name = "get_device_status";
+    tool.description = "status";
+    tool.parameters_json_schema =
+        "{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}";
+    tool.flags = OTOOL_LLM_TOOL_READ_ONLY;
+    tool.execute = tool_get_device_status;
+    otool_llm_tool_registry_add(reg, &tool);
+    otool_llm_tool_registry_seal(reg);
+
+    otool_llm_agent_config_t cfg = {};
+    cfg.struct_size = sizeof(cfg);
+    cfg.client = (otool_llm_client_handle_t)0x2;
+    cfg.tools = reg;
+    cfg.model = "fake-model";
+    cfg.state_mode = OTOOL_LLM_AGENT_STATE_LOCAL_TRANSCRIPT;
+    cfg.max_turns = 4;
+    cfg.max_tool_calls = 4;
+
+    otool_llm_agent_handle_t agent = NULL;
+    CHECK(otool_llm_agent_create(&cfg, &agent) == ESP_OK, "agent create (chat)");
+
+    agent_collector_t col = { 0 };
+    g_fake_turn = 0;
+    g_last_request = NULL;
+    g_fake_chat = 1;
+    esp_err_t err = otool_llm_agent_run_stream(agent, "设备状态如何？", agent_collect_cb, &col);
+    g_fake_chat = 0;
+    CHECK(err == ESP_OK, "chat run ok (0x%x)", (unsigned)err);
+
+    otool_llm_agent_event_type_t last = col.events[col.count - 1].type;
+    CHECK(last == OTOOL_LLM_AGENT_EVENT_RUN_COMPLETED, "chat RUN_COMPLETED (got %d)", (int)last);
+    CHECK_STR(col.text, "状态正常");
+
+    /* transcript 链断言：第二轮请求 messages 含 assistant(tool_calls) + tool 消息 */
+    CHECK(g_last_request != NULL, "chat last request captured");
+    if (g_last_request != NULL) {
+        CHECK(g_last_request->message_count >= 3, "chat messages >= 3 (got %u)",
+              (unsigned)g_last_request->message_count);
+        bool saw_assistant_calls = false;
+        bool saw_tool_msg = false;
+        for (size_t i = 0; i < g_last_request->message_count; i++) {
+            const otool_llm_text_message_t *m = &g_last_request->messages[i];
+            if (m->role == OTOOL_LLM_ROLE_ASSISTANT && m->tool_call_count > 0) {
+                saw_assistant_calls = true;
+                CHECK_STR(m->tool_calls[0].name, "get_device_status");
+                CHECK_STR(m->tool_calls[0].id, "call_chat");
+            }
+            if (m->role == OTOOL_LLM_ROLE_TOOL) {
+                saw_tool_msg = true;
+                CHECK_STR(m->tool_call_id, "call_chat");
+                CHECK(strstr(m->text, "\"uptime_s\"") != NULL, "tool result in transcript");
+            }
+        }
+        CHECK(saw_assistant_calls, "assistant tool_calls message present");
+        CHECK(saw_tool_msg, "tool role message present");
+    }
+
+    otool_llm_agent_destroy(agent);
+    otool_llm_tool_registry_destroy(reg);
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
     test_agent_tool_loop();
+    test_agent_chat_local_transcript();
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

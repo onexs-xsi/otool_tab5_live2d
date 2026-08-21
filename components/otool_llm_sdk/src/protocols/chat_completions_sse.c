@@ -48,6 +48,8 @@ static const char *role_name(otool_llm_role_t role)
         return "user";
     case OTOOL_LLM_ROLE_ASSISTANT:
         return "assistant";
+    case OTOOL_LLM_ROLE_TOOL:
+        return "tool";
     default:
         return "user";
     }
@@ -73,13 +75,63 @@ static esp_err_t chat_build_request(const otool_llm_request_view_t *req,
     for (size_t i = 0; i < req->message_count; i++) {
         cJSON *m = cJSON_CreateObject();
         cJSON_AddStringToObject(m, "role", role_name(req->messages[i].role));
-        cJSON_AddStringToObject(m, "content", req->messages[i].text);
+        if (req->messages[i].role == OTOOL_LLM_ROLE_TOOL) {
+            /* tool 消息：需要 tool_call_id，content 承载结果 */
+            if (req->messages[i].tool_call_id != NULL) {
+                cJSON_AddStringToObject(m, "tool_call_id", req->messages[i].tool_call_id);
+            }
+            cJSON_AddStringToObject(m, "content",
+                                    req->messages[i].text != NULL ? req->messages[i].text : "");
+        } else {
+            cJSON_AddStringToObject(m, "content",
+                                    req->messages[i].text != NULL ? req->messages[i].text : "");
+            /* assistant 消息可携带 tool_calls（WP5） */
+            if (req->messages[i].tool_calls != NULL && req->messages[i].tool_call_count > 0) {
+                cJSON *calls = cJSON_AddArrayToObject(m, "tool_calls");
+                for (size_t j = 0; j < req->messages[i].tool_call_count; j++) {
+                    const otool_llm_request_tool_call_t *tc = &req->messages[i].tool_calls[j];
+                    cJSON *call = cJSON_CreateObject();
+                    cJSON_AddStringToObject(call, "id", tc->id != NULL ? tc->id : "");
+                    cJSON_AddStringToObject(call, "type", "function");
+                    cJSON *fn = cJSON_CreateObject();
+                    cJSON_AddStringToObject(fn, "name", tc->name != NULL ? tc->name : "");
+                    cJSON_AddStringToObject(fn, "arguments",
+                                            tc->arguments != NULL ? tc->arguments : "");
+                    cJSON_AddItemToObject(call, "function", fn);
+                    cJSON_AddItemToArray(calls, call);
+                }
+            }
+        }
         cJSON_AddItemToArray(messages, m);
     }
     cJSON_AddBoolToObject(root, "stream", 1);
     if (provider->capabilities & OTOOL_LLM_PROVIDER_CAP_CHAT_STREAM_OPTIONS) {
         cJSON *stream_options = cJSON_AddObjectToObject(root, "stream_options");
         cJSON_AddBoolToObject(stream_options, "include_usage", 1);
+    }
+    /* 工具定义（WP5）：tools[].function */
+    if (req->tool_count > 0) {
+        cJSON *tools = cJSON_AddArrayToObject(root, "tools");
+        for (size_t i = 0; i < req->tool_count; i++) {
+            const otool_llm_tool_definition_t *t = &req->tools[i];
+            cJSON *tool = cJSON_CreateObject();
+            cJSON_AddStringToObject(tool, "type", "function");
+            cJSON *fn = cJSON_CreateObject();
+            cJSON_AddStringToObject(fn, "name", t->name);
+            if (t->description != NULL) {
+                cJSON_AddStringToObject(fn, "description", t->description);
+            }
+            cJSON *params = cJSON_Parse(t->parameters_json_schema);
+            if (params == NULL) {
+                cJSON_Delete(tool);
+                cJSON_Delete(root);
+                return OTOOL_LLM_ERR_TOOL_SCHEMA;
+            }
+            cJSON_AddItemToObject(fn, "parameters", params);
+            cJSON_AddBoolToObject(fn, "strict", t->strict ? 1 : 0);
+            cJSON_AddItemToObject(tool, "function", fn);
+            cJSON_AddItemToArray(tools, tool);
+        }
     }
     if (req->max_output_tokens > 0) {
         if (provider->capabilities & OTOOL_LLM_PROVIDER_CAP_CHAT_MAX_COMPLETION_TOKENS) {
@@ -149,6 +201,22 @@ static esp_err_t chat_on_sse_event(otool_llm_exec_ctx_t *ctx,
     /* data: [DONE] */
     if (data_len == 6 && memcmp(data, "[DONE]", 6) == 0) {
         ctx->proto.chat.saw_done = true;
+        /* Chat 流没有独立的 tool_calls.done 事件：参数流完 + finish_reason=tool_calls
+         * 即完整。对仍 active 的槽补发 TOOL_CALL_DONE（计划 §4.3/§7）。 */
+        otool_llm_chat_state_t *st = &ctx->proto.chat;
+        for (int i = 0; i < CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS; i++) {
+            otool_llm_pending_tool_call_t *slot = &st->tool_calls[i];
+            if (slot->active) {
+                otool_llm_text_event_t evt = { .type = OTOOL_LLM_TEXT_EVENT_TOOL_CALL_DONE };
+                evt.data.tool_call_done.output_index = slot->output_index;
+                evt.data.tool_call_done.call_id = slot->call_id[0] ? slot->call_id : NULL;
+                evt.data.tool_call_done.name = slot->name[0] ? slot->name : NULL;
+                evt.data.tool_call_done.arguments = slot->arguments;
+                evt.data.tool_call_done.arguments_len = slot->arguments_len;
+                ctx->emit(ctx, &evt);
+                slot->active = false;
+            }
+        }
         otool_llm_text_event_t evt = { .type = OTOOL_LLM_TEXT_EVENT_COMPLETED };
         ctx->emit(ctx, &evt);
         return ESP_OK;
@@ -218,6 +286,79 @@ static esp_err_t chat_on_sse_event(otool_llm_exec_ctx_t *ctx,
                 evt.data.text_delta.data = content->valuestring != NULL ? content->valuestring : "";
                 evt.data.text_delta.data_len = content->valuestring != NULL ? strlen(content->valuestring) : 0;
                 ctx->emit(ctx, &evt);
+            }
+            /* 流式工具调用（WP5）：delta.tool_calls[] 按 index 聚合 */
+            cJSON *tool_calls = get_child(delta, "tool_calls");
+            if (cJSON_IsArray(tool_calls)) {
+                int tc_count = cJSON_GetArraySize(tool_calls);
+                for (int j = 0; j < tc_count; j++) {
+                    cJSON *tc = cJSON_GetArrayItem(tool_calls, j);
+                    cJSON *idx = get_child(tc, "index");
+                    uint32_t index = cJSON_IsNumber(idx) ? (uint32_t)idx->valuedouble : 0;
+                    otool_llm_chat_state_t *st = &ctx->proto.chat;
+                    otool_llm_pending_tool_call_t *slot = NULL;
+                    for (int k = 0; k < CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS; k++) {
+                        if (st->tool_calls[k].active && st->tool_calls[k].output_index == index) {
+                            slot = &st->tool_calls[k];
+                            break;
+                        }
+                    }
+                    cJSON *tc_id = get_child(tc, "id");
+                    cJSON *tc_fn = get_child(tc, "function");
+                    cJSON *fn_name = get_child(tc_fn, "name");
+                    cJSON *fn_args = get_child(tc_fn, "arguments");
+                    bool is_new = (cJSON_IsString(tc_id) || cJSON_IsString(fn_name));
+                    if (slot == NULL && is_new) {
+                        for (int k = 0; k < CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS; k++) {
+                            if (!st->tool_calls[k].active) {
+                                slot = &st->tool_calls[k];
+                                break;
+                            }
+                        }
+                        if (slot == NULL) {
+                            err = otool_llm_exec_report_error(ctx, OTOOL_LLM_ERR_TOOL_ARGUMENTS,
+                                                              "too many pending tool calls", NULL);
+                            goto out;
+                        }
+                        memset(slot, 0, sizeof(*slot));
+                        slot->active = true;
+                        slot->output_index = index;
+                        if (cJSON_IsString(tc_id) && tc_id->valuestring != NULL) {
+                            snprintf(slot->call_id, sizeof(slot->call_id), "%s", tc_id->valuestring);
+                        }
+                        if (cJSON_IsString(fn_name) && fn_name->valuestring != NULL) {
+                            snprintf(slot->name, sizeof(slot->name), "%s", fn_name->valuestring);
+                        }
+                        otool_llm_text_event_t evt = {
+                            .type = OTOOL_LLM_TEXT_EVENT_TOOL_CALL_STARTED
+                        };
+                        evt.data.tool_call_started.output_index = index;
+                        evt.data.tool_call_started.call_id =
+                            slot->call_id[0] ? slot->call_id : NULL;
+                        evt.data.tool_call_started.name = slot->name[0] ? slot->name : NULL;
+                        ctx->emit(ctx, &evt);
+                    }
+                    if (slot != NULL && cJSON_IsString(fn_args) && fn_args->valuestring != NULL) {
+                        size_t alen = strlen(fn_args->valuestring);
+                        if (slot->arguments_len + alen >= sizeof(slot->arguments)) {
+                            err = otool_llm_exec_report_error(ctx, OTOOL_LLM_ERR_TOOL_ARGUMENTS,
+                                                              "tool arguments over budget", NULL);
+                            goto out;
+                        }
+                        memcpy(slot->arguments + slot->arguments_len, fn_args->valuestring, alen);
+                        slot->arguments_len += alen;
+                        slot->arguments[slot->arguments_len] = '\0';
+                        otool_llm_text_event_t evt = {
+                            .type = OTOOL_LLM_TEXT_EVENT_TOOL_ARGUMENTS_DELTA
+                        };
+                        evt.data.tool_arguments_delta.output_index = index;
+                        evt.data.tool_arguments_delta.call_id =
+                            slot->call_id[0] ? slot->call_id : NULL;
+                        evt.data.tool_arguments_delta.delta = fn_args->valuestring;
+                        evt.data.tool_arguments_delta.delta_len = alen;
+                        ctx->emit(ctx, &evt);
+                    }
+                }
             }
         }
     }

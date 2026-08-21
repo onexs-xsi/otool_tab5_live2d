@@ -20,12 +20,24 @@ extern "C" {
 #endif
 
 /**
+ * @brief Internal deep-copied tool call inside an assistant message (WP5).
+ */
+typedef struct {
+    char *id;
+    char *name;
+    char *arguments;
+} otool_llm_request_tool_call_t;
+
+/**
  * @brief Internal deep-copied message (owned strings). Same shape as the public
  *        otool_llm_text_message_t but with mutable storage.
  */
 typedef struct {
     otool_llm_role_t role;
     char *text;
+    otool_llm_request_tool_call_t *tool_calls; /**< Assistant tool calls; NULL = none */
+    size_t tool_call_count;
+    char *tool_call_id;  /**< Set when role == OTOOL_LLM_ROLE_TOOL */
 } otool_llm_request_message_t;
 
 /**
@@ -82,6 +94,7 @@ typedef struct {
     bool saw_done;           /**< data: [DONE] seen */
     bool saw_usage;          /**< usage chunk seen */
     char finish_reason[32];  /**< last non-empty finish_reason */
+    otool_llm_pending_tool_call_t tool_calls[CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS]; /**< WP5 */
 } otool_llm_chat_state_t;
 
 /**

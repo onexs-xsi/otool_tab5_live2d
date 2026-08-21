@@ -172,6 +172,24 @@ static esp_err_t exec_on_error_body(void *arg, const char *body, size_t len)
 
 /* ---------------- create/destroy ---------------- */
 
+static void request_messages_free(otool_llm_request_message_t *messages, size_t count)
+{
+    if (messages == NULL) {
+        return;
+    }
+    for (size_t i = 0; i < count; i++) {
+        free((void *)messages[i].text);
+        free((void *)messages[i].tool_call_id);
+        for (size_t j = 0; j < messages[i].tool_call_count; j++) {
+            free((void *)messages[i].tool_calls[j].arguments);
+            free((void *)messages[i].tool_calls[j].name);
+            free((void *)messages[i].tool_calls[j].id);
+        }
+        free((void *)messages[i].tool_calls);
+    }
+    free((void *)messages);
+}
+
 esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
                                    const otool_llm_text_request_t *request,
                                    otool_llm_request_handle_t *out_request)
@@ -206,9 +224,9 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
             ESP_LOGE(TAG, "store is not supported by the Chat protocol");
             return OTOOL_LLM_ERR_UNSUPPORTED;
         }
-        if (request->tool_count > 0 || request->tool_output_count > 0) {
-            /* Chat 工具调用在 WP5 实现；当前拒绝而非静默丢弃 */
-            ESP_LOGE(TAG, "tools/tool_outputs are not supported by the Chat protocol yet");
+        if (request->tool_output_count > 0) {
+            /* function_call_output 是 Responses 概念；Chat 用 tool role 消息（WP5） */
+            ESP_LOGE(TAG, "tool_outputs are not supported by the Chat protocol");
             return OTOOL_LLM_ERR_UNSUPPORTED;
         }
     }
@@ -253,6 +271,42 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
             for (size_t i = 0; i < request->message_count; i++) {
                 r->messages[i].role = request->messages[i].role;
                 err = otool_llm_strdup(request->messages[i].text, &r->messages[i].text);
+                if (err == ESP_OK) {
+                    err = otool_llm_strdup(request->messages[i].tool_call_id,
+                                           &r->messages[i].tool_call_id);
+                }
+                /* assistant 消息的 tool_calls（WP5） */
+                if (err == ESP_OK && request->messages[i].tool_calls != NULL &&
+                    request->messages[i].tool_call_count > 0) {
+                    r->messages[i].tool_calls = (otool_llm_request_tool_call_t *)calloc(
+                        request->messages[i].tool_call_count, sizeof(*r->messages[i].tool_calls));
+                    if (r->messages[i].tool_calls == NULL) {
+                        err = ESP_ERR_NO_MEM;
+                    } else {
+                        for (size_t j = 0; j < request->messages[i].tool_call_count; j++) {
+                            const otool_llm_tool_call_msg_t *src =
+                                &request->messages[i].tool_calls[j];
+                            err = otool_llm_strdup(src->id,
+                                                   (char **)&r->messages[i].tool_calls[j].id);
+                            if (err == ESP_OK) {
+                                err = otool_llm_strdup(src->name,
+                                                       (char **)&r->messages[i].tool_calls[j].name);
+                            }
+                            if (err == ESP_OK) {
+                                err = otool_llm_strdup(
+                                    src->arguments,
+                                    (char **)&r->messages[i].tool_calls[j].arguments);
+                            }
+                            if (err != ESP_OK) {
+                                break;
+                            }
+                        }
+                        if (err == ESP_OK) {
+                            r->messages[i].tool_call_count =
+                                request->messages[i].tool_call_count;
+                        }
+                    }
+                }
                 if (err != ESP_OK) {
                     break;
                 }
@@ -329,10 +383,7 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
             free((void *)r->tools[i].name);
         }
         free((void *)r->tools);
-        for (size_t i = 0; i < r->message_count; i++) {
-            free((void *)r->messages[i].text);
-        }
-        free((void *)r->messages);
+        request_messages_free(r->messages, r->message_count);
         free((void *)r->previous_response_id);
         free((void *)r->instructions);
         free((void *)r->model);
@@ -358,10 +409,7 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
             free((void *)r->tools[i].name);
         }
         free((void *)r->tools);
-        for (size_t i = 0; i < r->message_count; i++) {
-            free((void *)r->messages[i].text);
-        }
-        free((void *)r->messages);
+        request_messages_free(r->messages, r->message_count);
         free((void *)r->previous_response_id);
         free((void *)r->instructions);
         free((void *)r->model);
@@ -413,10 +461,7 @@ void otool_llm_request_destroy(otool_llm_request_handle_t request)
         free((void *)request->tools[i].name);
     }
     free((void *)request->tools);
-    for (size_t i = 0; i < request->message_count; i++) {
-        free((void *)request->messages[i].text);
-    }
-    free((void *)request->messages);
+    request_messages_free(request->messages, request->message_count);
     free((void *)request->previous_response_id);
     free((void *)request->instructions);
     free((void *)request->model);

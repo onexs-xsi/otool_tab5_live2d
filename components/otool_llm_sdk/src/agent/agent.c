@@ -48,6 +48,11 @@ static const char *TAG = "llm_agent";
 /* 单轮最多收集的工具调用（本地防御上限） */
 #define AGENT_MAX_CALLS_PER_TURN CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS
 
+/* Chat/LOCAL_TRANSCRIPT 上限（WP5） */
+#define AGENT_TRANSCRIPT_MAX 8
+#define AGENT_TRANSCRIPT_TEXT_BYTES 256
+#define AGENT_TRANSCRIPT_ARG_BYTES 512
+
 typedef struct {
     bool used;
     bool ready;
@@ -56,6 +61,18 @@ typedef struct {
     char arguments[CONFIG_OTOOL_LLM_MAX_TOOL_ARGUMENT_BYTES];
     size_t arguments_len;
 } agent_tool_call_t;
+
+/* 本地 transcript 条目（Chat 模式） */
+typedef struct {
+    otool_llm_role_t role;
+    char text[AGENT_TRANSCRIPT_TEXT_BYTES];
+    otool_llm_tool_call_msg_t tool_calls[AGENT_MAX_CALLS_PER_TURN];
+    char call_ids[AGENT_MAX_CALLS_PER_TURN][64];
+    char call_names[AGENT_MAX_CALLS_PER_TURN][64];
+    char call_args[AGENT_MAX_CALLS_PER_TURN][AGENT_TRANSCRIPT_ARG_BYTES];
+    size_t tool_call_count;
+    char tool_call_id[64];
+} agent_transcript_entry_t;
 
 struct otool_llm_agent {
     otool_llm_client_handle_t client;
@@ -84,6 +101,10 @@ struct otool_llm_agent {
     /* 工具输出缓冲（跨 execute 存活，指向 last_tool_outputs） */
     char tool_output_bufs[AGENT_MAX_CALLS_PER_TURN][CONFIG_OTOOL_LLM_MAX_TOOL_OUTPUT_BYTES];
     char tool_call_ids[AGENT_MAX_CALLS_PER_TURN][64];
+    /* Chat/LOCAL_TRANSCRIPT（WP5） */
+    bool chat_mode;
+    agent_transcript_entry_t transcript[AGENT_TRANSCRIPT_MAX];
+    size_t transcript_count;
 };
 
 /* ---------------- 事件发射 ---------------- */
@@ -119,7 +140,19 @@ typedef struct {
     esp_err_t turn_error;
     otool_llm_usage_t usage;
     bool usage_set;
+    /* 本轮完整文本累积（transcript 需要） */
+    char text[1024];
+    size_t text_len;
 } bridge_ctx_t;
+
+static void bridge_append_text(bridge_ctx_t *b, const char *data, size_t len)
+{
+    if (b->text_len + len < sizeof(b->text)) {
+        memcpy(b->text + b->text_len, data, len);
+        b->text_len += len;
+        b->text[b->text_len] = '\0';
+    }
+}
 
 static otool_llm_event_action_t bridge_cb(const otool_llm_text_event_t *evt, void *user_ctx)
 {
@@ -134,10 +167,11 @@ static otool_llm_event_action_t bridge_cb(const otool_llm_text_event_t *evt, voi
         break;
     case OTOOL_LLM_TEXT_EVENT_TEXT_DELTA: {
         otool_llm_agent_event_t ae = { .type = OTOOL_LLM_AGENT_EVENT_TEXT_DELTA };
-        ae.turn_index = agent->running ? agent->turn_index : 0;
+        ae.turn_index = agent->turn_index;
         ae.data.text_delta.data = evt->data.text_delta.data;
         ae.data.text_delta.data_len = evt->data.text_delta.data_len;
         agent_emit(agent, &ae);
+        bridge_append_text(b, evt->data.text_delta.data, evt->data.text_delta.data_len);
         break;
     }
     case OTOOL_LLM_TEXT_EVENT_TOOL_CALL_STARTED: {
@@ -281,6 +315,7 @@ esp_err_t otool_llm_agent_run_stream(otool_llm_agent_handle_t agent,
     agent->user_ctx = user_ctx;
     agent->turn_index = 0;
     agent->last_output_count = 0;
+    agent->transcript_count = 0; /* 每次 run 独立 transcript */
 
     otool_llm_agent_event_t evt = { .type = OTOOL_LLM_AGENT_EVENT_RUN_STARTED };
     agent_emit(agent, &evt);
@@ -329,21 +364,53 @@ esp_err_t otool_llm_agent_run_stream(otool_llm_agent_handle_t agent,
             tool_count++;
         }
 
-        /* 构建请求 */
+        /* 构建请求（Chat/LOCAL_TRANSCRIPT 与 Responses 链分支） */
         otool_llm_text_message_t msg = { .role = OTOOL_LLM_ROLE_USER, .text = user_text };
+        otool_llm_text_message_t chat_msgs[AGENT_TRANSCRIPT_MAX + 1];
         otool_llm_text_request_t req = {};
         req.struct_size = sizeof(req);
         req.model = agent->model;
         req.instructions = agent->instructions;
         req.max_output_tokens = 2048;
-        req.store = true; /* REMOTE_RESPONSE_CHAIN */
-        if (first_turn) {
-            req.messages = &msg;
-            req.message_count = 1;
+        if (agent->chat_mode) {
+            /* 第一轮：user 输入先记入 transcript */
+            if (first_turn && agent->transcript_count < AGENT_TRANSCRIPT_MAX) {
+                agent_transcript_entry_t *ue = &agent->transcript[agent->transcript_count++];
+                memset(ue, 0, sizeof(*ue));
+                ue->role = OTOOL_LLM_ROLE_USER;
+                snprintf(ue->text, sizeof(ue->text), "%s", user_text);
+            }
+            /* 本地 transcript：历史消息 + 当前轮输入 */
+            size_t n = 0;
+            for (size_t i = 0; i < agent->transcript_count && n < AGENT_TRANSCRIPT_MAX; i++) {
+                agent_transcript_entry_t *e = &agent->transcript[i];
+                chat_msgs[n].role = e->role;
+                chat_msgs[n].text = e->text;
+                chat_msgs[n].tool_call_id = e->role == OTOOL_LLM_ROLE_TOOL ? e->tool_call_id : NULL;
+                chat_msgs[n].tool_calls = NULL;
+                chat_msgs[n].tool_call_count = 0;
+                if (e->role == OTOOL_LLM_ROLE_ASSISTANT && e->tool_call_count > 0) {
+                    chat_msgs[n].tool_calls = e->tool_calls;
+                    chat_msgs[n].tool_call_count = e->tool_call_count;
+                }
+                n++;
+            }
+            if (first_turn) {
+                chat_msgs[n++] = msg; /* 当前 user 输入 */
+            }
+            req.messages = chat_msgs;
+            req.message_count = n;
         } else {
-            req.tool_outputs = agent->last_tool_outputs;
-            req.tool_output_count = agent->last_output_count;
-            req.previous_response_id = agent->response_id[0] != '\0' ? agent->response_id : NULL;
+            req.store = true; /* REMOTE_RESPONSE_CHAIN */
+            if (first_turn) {
+                req.messages = &msg;
+                req.message_count = 1;
+            } else {
+                req.tool_outputs = agent->last_tool_outputs;
+                req.tool_output_count = agent->last_output_count;
+                req.previous_response_id =
+                    agent->response_id[0] != '\0' ? agent->response_id : NULL;
+            }
         }
         req.tools = tool_count > 0 ? tools : NULL;
         req.tool_count = tool_count;
@@ -397,10 +464,46 @@ esp_err_t otool_llm_agent_run_stream(otool_llm_agent_handle_t agent,
         agent_emit(agent, &evt);
 
         if (ready_count == 0) {
+            /* 最终回答轮：Chat 模式把模型文本记入 transcript */
+            if (agent->chat_mode && bridge.text_len > 0 &&
+                agent->transcript_count < AGENT_TRANSCRIPT_MAX) {
+                agent_transcript_entry_t *e = &agent->transcript[agent->transcript_count++];
+                memset(e, 0, sizeof(*e));
+                e->role = OTOOL_LLM_ROLE_ASSISTANT;
+                snprintf(e->text, sizeof(e->text), "%.255s", bridge.text);
+            }
             evt.type = OTOOL_LLM_AGENT_EVENT_RUN_COMPLETED;
             agent_emit(agent, &evt);
             result = ESP_OK;
             break;
+        }
+
+        /* Chat 模式：模型发出工具调用 → 记录 assistant(tool_calls) 消息 */
+        if (agent->chat_mode) {
+            if (agent->transcript_count < AGENT_TRANSCRIPT_MAX) {
+                agent_transcript_entry_t *e = &agent->transcript[agent->transcript_count++];
+                memset(e, 0, sizeof(*e));
+                e->role = OTOOL_LLM_ROLE_ASSISTANT;
+                snprintf(e->text, sizeof(e->text), "%.255s", bridge.text);
+                size_t tci = 0;
+                for (int i = 0; i < bridge.call_count && tci < AGENT_MAX_CALLS_PER_TURN; i++) {
+                    agent_tool_call_t *c = &bridge.calls[i];
+                    if (!c->used || !c->ready) {
+                        continue;
+                    }
+                    snprintf(e->call_ids[tci], sizeof(e->call_ids[tci]), "%s",
+                             c->call_id[0] ? c->call_id : "call_unknown");
+                    snprintf(e->call_names[tci], sizeof(e->call_names[tci]), "%s",
+                             c->name[0] ? c->name : "");
+                    snprintf(e->call_args[tci], sizeof(e->call_args[tci]), "%s",
+                             c->arguments_len > 0 ? c->arguments : "{}");
+                    e->tool_calls[tci].id = e->call_ids[tci];
+                    e->tool_calls[tci].name = e->call_names[tci];
+                    e->tool_calls[tci].arguments = e->call_args[tci];
+                    tci++;
+                }
+                e->tool_call_count = tci;
+            }
         }
 
         /* 执行工具并收集输出 */
@@ -488,6 +591,15 @@ esp_err_t otool_llm_agent_run_stream(otool_llm_agent_handle_t agent,
                 out_item->call_id = agent->tool_call_ids[out_count];
                 out_item->output = agent->tool_output_bufs[out_count];
                 out_count++;
+                /* Chat 模式：追加 tool 结果消息到 transcript */
+                if (agent->chat_mode && agent->transcript_count < AGENT_TRANSCRIPT_MAX) {
+                    agent_transcript_entry_t *te = &agent->transcript[agent->transcript_count++];
+                    memset(te, 0, sizeof(*te));
+                    te->role = OTOOL_LLM_ROLE_TOOL;
+                    snprintf(te->tool_call_id, sizeof(te->tool_call_id), "%s",
+                             c->call_id[0] ? c->call_id : "call_unknown");
+                    snprintf(te->text, sizeof(te->text), "%s", output);
+                }
             }
             if (agent->cancel_requested) {
                 break;
@@ -520,6 +632,7 @@ void otool_llm_agent_reset_session(otool_llm_agent_handle_t agent)
     }
     agent->response_id[0] = '\0';
     agent->last_output_count = 0;
+    agent->transcript_count = 0;
 }
 
 void otool_llm_agent_destroy(otool_llm_agent_handle_t agent)
@@ -555,6 +668,7 @@ esp_err_t otool_llm_agent_create(const otool_llm_agent_config_t *config,
     agent->client = config->client;
     agent->tools = config->tools;
     agent->state_mode = config->state_mode;
+    agent->chat_mode = (config->state_mode == OTOOL_LLM_AGENT_STATE_LOCAL_TRANSCRIPT);
     agent->max_turns = config->max_turns > 0 ? config->max_turns : CONFIG_OTOOL_LLM_MAX_AGENT_TURNS;
     agent->max_tool_calls = config->max_tool_calls > 0 ? config->max_tool_calls
                                                        : CONFIG_OTOOL_LLM_MAX_AGENT_TOOL_CALLS;
