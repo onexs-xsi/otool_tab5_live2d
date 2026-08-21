@@ -15,12 +15,34 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "nvs.h"
 #include "sdkconfig.h"
 
 #include <cstdio>
 #include <cstring>
 
 static const char *TAG = "agent_app";
+
+/* NVS：agent 协议选择（"responses" | "chat"），重启生效 */
+#define AGENT_PROTO_NVS_NAMESPACE "otool_cfg"
+#define AGENT_PROTO_NVS_KEY "agent_proto"
+
+static const char *agent_proto_get(void)
+{
+    static char proto[16] = { 0 };
+    nvs_handle_t h;
+    if (nvs_open(AGENT_PROTO_NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
+        size_t len = sizeof(proto);
+        if (nvs_get_str(h, AGENT_PROTO_NVS_KEY, proto, &len) != ESP_OK) {
+            proto[0] = '\0';
+        }
+        nvs_close(h);
+    }
+    if (proto[0] == '\0' || (strcmp(proto, "chat") != 0 && strcmp(proto, "responses") != 0)) {
+        return "responses"; /* 默认 */
+    }
+    return proto;
+}
 
 static constexpr size_t AGENT_REPLY_CAP = 4096;
 
@@ -179,10 +201,17 @@ static void agent_worker_task(void *arg)
     otool_llm_client_config_t cfg = {};
     cfg.struct_size = sizeof(cfg);
     cfg.provider = OTOOL_LLM_PROVIDER_VOLCENGINE_ARK;
-    cfg.protocol = OTOOL_LLM_PROTOCOL_AUTO;
     cfg.api_key = api_key;
     cfg.connect_timeout_ms = 15000;
     cfg.read_timeout_ms = 60000;
+    const char *proto = agent_proto_get();
+    if (strcmp(proto, "chat") == 0) {
+        cfg.protocol = OTOOL_LLM_PROTOCOL_CHAT_COMPLETIONS_SSE;
+        ESP_LOGI(TAG, "agent protocol: Chat Completions (local transcript)");
+    } else {
+        cfg.protocol = OTOOL_LLM_PROTOCOL_AUTO;
+        ESP_LOGI(TAG, "agent protocol: Responses (remote chain)");
+    }
     otool_llm_client_handle_t client = nullptr;
     if (otool_llm_client_create(&cfg, &client) != ESP_OK) {
         ESP_LOGE(TAG, "client create failed");
@@ -221,7 +250,8 @@ static void agent_worker_task(void *arg)
     acfg.tools = reg;
     acfg.model = CONFIG_OTOOL_LLM_MODEL;
     acfg.instructions = "你是 Tab5 设备助手。回答使用中文。";
-    acfg.state_mode = OTOOL_LLM_AGENT_STATE_REMOTE_RESPONSE_CHAIN;
+    acfg.state_mode = strcmp(proto, "chat") == 0 ? OTOOL_LLM_AGENT_STATE_LOCAL_TRANSCRIPT
+                                                : OTOOL_LLM_AGENT_STATE_REMOTE_RESPONSE_CHAIN;
     acfg.max_turns = 4;
     acfg.max_tool_calls = 4;
     acfg.run_timeout_ms = 120000;
@@ -323,6 +353,11 @@ extern "C" size_t agent_app_reply_read(char *buf, size_t cap)
         buf[0] = '\0';
     }
     return n;
+}
+
+extern "C" const char *agent_proto_name(void)
+{
+    return agent_proto_get();
 }
 
 extern "C" void agent_app_start(void)

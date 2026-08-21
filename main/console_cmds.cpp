@@ -14,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "linenoise/linenoise.h"
+#include "nvs.h"
 #include "sdkconfig.h"
 
 #include <cstdio>
@@ -257,6 +258,35 @@ static int do_agent_status(int argc, char **argv)
     return 0;
 }
 
+static int do_agent_protocol(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("agent-protocol: %s (restart to apply)\n", agent_proto_name());
+        printf("usage: agent-protocol <responses|chat>\n");
+        return 0;
+    }
+    if (strcmp(argv[1], "responses") != 0 && strcmp(argv[1], "chat") != 0) {
+        printf("agent-protocol: invalid '%s' (use responses|chat)\n", argv[1]);
+        return 1;
+    }
+    nvs_handle_t h;
+    if (nvs_open("otool_cfg", NVS_READWRITE, &h) != ESP_OK) {
+        printf("agent-protocol: nvs open failed\n");
+        return 1;
+    }
+    esp_err_t err = nvs_set_str(h, "agent_proto", argv[1]);
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+    if (err != ESP_OK) {
+        printf("agent-protocol: save failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    printf("agent-protocol: set to %s (restart to apply)\n", argv[1]);
+    return 0;
+}
+
 /* ---------------- init ---------------- */
 
 static void register_commands(void)
@@ -328,6 +358,11 @@ static void register_commands(void)
     cmd.command = "agent-status";
     cmd.help = "agent worker status";
     cmd.func = &do_agent_status;
+    esp_console_cmd_register(&cmd);
+
+    cmd.command = "agent-protocol";
+    cmd.help = "agent protocol: agent-protocol <responses|chat> (restart to apply)";
+    cmd.func = &do_agent_protocol;
     esp_console_cmd_register(&cmd);
 }
 

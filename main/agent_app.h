@@ -37,6 +37,11 @@ void agent_app_status(char *buf, size_t cap);
  */
 size_t agent_app_reply_read(char *buf, size_t cap);
 
+/**
+ * @brief Current protocol name ("responses" or "chat").
+ */
+const char *agent_proto_name(void);
+
 #ifdef __cplusplus
 }
 #endif
