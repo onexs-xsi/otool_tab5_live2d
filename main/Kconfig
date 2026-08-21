@@ -17,10 +17,13 @@ config OTOOL_WIFI_MAX_RETRY
 
 config OTOOL_LLM_API_KEY
     string "Doubao Ark API key (runtime credential)"
-    default "OTOOL_LLM_API_KEY_FROM_SDKCONFIG"
+    default ""
     help
         Passed to otool_llm_client at runtime; never compiled into the SDK.
-        NOTE: this project's policy allows committing this key (local dev budget).
+        Set the value in your local sdkconfig (sdkconfig is git-ignored and
+        never pushed). Example:
+            idf.py menuconfig  ->  otool_tab5_live2d app  ->  Doubao Ark API key
+        or add to sdkconfig.defaults locally without committing it.
 
 config OTOOL_LLM_MODEL
     string "Doubao model id"
