@@ -58,9 +58,23 @@ static int do_wifi_reconnect(int argc, char **argv)
 static int do_llm_ask(int argc, char **argv)
 {
     if (argc > 1) {
-        /* llm-ask <text>：直接使用自定义问题 */
-        llm_app_ask_text(argv[1]);
-        printf("llm: asking: %s\n", argv[1]);
+        /* llm-ask <text...>：拼接全部参数作为完整问题（支持含空格的中文/英文） */
+        char question[256];
+        size_t pos = 0;
+        for (int i = 1; i < argc && pos < sizeof(question) - 1; i++) {
+            if (i > 1 && pos < sizeof(question) - 2) {
+                question[pos++] = ' ';
+            }
+            size_t n = strlen(argv[i]);
+            if (n > sizeof(question) - 1 - pos) {
+                n = sizeof(question) - 1 - pos;
+            }
+            memcpy(question + pos, argv[i], n);
+            pos += n;
+        }
+        question[pos] = '\0';
+        llm_app_ask_text(question);
+        printf("llm: asking: %s\n", question);
         return 0;
     }
 
