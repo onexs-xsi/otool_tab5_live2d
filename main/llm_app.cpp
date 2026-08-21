@@ -31,6 +31,12 @@ static EventGroupHandle_t s_wifi_events = nullptr;
 static int s_wifi_retries = 0;
 static void *s_tab5_comp = nullptr;
 
+/* 触摸触发与打断 */
+static SemaphoreHandle_t s_trigger_sem = nullptr;   /* 点击屏幕 → 立即提问/打断 */
+static SemaphoreHandle_t s_request_lock = nullptr;  /* 保护 s_active_request */
+static otool_llm_request_handle_t s_active_request = nullptr;
+static volatile int s_round = 0;
+
 /* ---------------- 共享回复 buffer（worker 写，LVGL timer 读） ---------------- */
 
 static constexpr size_t REPLY_BUF_CAP = 4096;
@@ -101,6 +107,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "got ip: " IPSTR, IP2STR(&event->ip_info.ip));
         s_wifi_retries = 0;
+        /* 降低发射功率（10 dBm），减少 USB 供电下的电流尖峰（HP WDT 复位缓解） */
+        esp_err_t perr = esp_wifi_set_max_tx_power(40);
+        if (perr != ESP_OK) {
+            ESP_LOGW(TAG, "esp_wifi_set_max_tx_power: %s", esp_err_to_name(perr));
+        }
         xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);
     }
 }
@@ -216,10 +227,28 @@ static void llm_worker_task(void *arg)
 
     const char *questions[] = {
         "你好，请用一句话介绍你自己。",
+        "1+1等于几？请只回答数字。",
         "请用三个要点说明什么是流式输出。",
     };
 
     for (int round = 0;; round++) {
+        /* 等待触发（点击屏幕）或 30s 自动进入下一轮 */
+        if (xSemaphoreTake(s_trigger_sem, pdMS_TO_TICKS(30000)) == pdTRUE) {
+            /* 点击触发：若正在请求，先跨任务打断（SDK 取消能力） */
+            if (xSemaphoreTake(s_request_lock, portMAX_DELAY) == pdTRUE) {
+                if (s_active_request != nullptr) {
+                    ESP_LOGI(TAG, "tap: cancelling in-flight request");
+                    otool_llm_request_cancel(s_active_request);
+                }
+                xSemaphoreGive(s_request_lock);
+            }
+            int waited = 0;
+            while (s_request_busy && waited++ < 300) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+        }
+
+        s_round = round;
         const char *question = questions[round % (sizeof(questions) / sizeof(questions[0]))];
 
         reply_reset();
@@ -231,7 +260,7 @@ static void llm_worker_task(void *arg)
         req.model = CONFIG_OTOOL_LLM_MODEL;
         req.messages = &msg;
         req.message_count = 1;
-        req.max_output_tokens = 1024;
+        req.max_output_tokens = 2048;
 
         otool_llm_request_handle_t request = nullptr;
         err = otool_llm_request_create(client, &req, &request);
@@ -239,8 +268,14 @@ static void llm_worker_task(void *arg)
             ESP_LOGE(TAG, "request create failed: %s", esp_err_to_name(err));
             reply_set_error("request create failed");
             s_request_busy = false;
-            vTaskDelay(pdMS_TO_TICKS(30000));
+            vTaskDelay(pdMS_TO_TICKS(5000));
             continue;
+        }
+
+        /* 注册为可打断的当前请求 */
+        if (xSemaphoreTake(s_request_lock, portMAX_DELAY) == pdTRUE) {
+            s_active_request = request;
+            xSemaphoreGive(s_request_lock);
         }
 
         ESP_LOGI(TAG, "round %d: ask '%s'", round, question);
@@ -248,9 +283,13 @@ static void llm_worker_task(void *arg)
         ESP_LOGI(TAG, "round %d done: %s, reply_len=%u", round, esp_err_to_name(err),
                  (unsigned)s_reply_len);
 
+        if (xSemaphoreTake(s_request_lock, portMAX_DELAY) == pdTRUE) {
+            s_active_request = nullptr;
+            xSemaphoreGive(s_request_lock);
+        }
+
         otool_llm_request_destroy(request);
         s_request_busy = false;
-        vTaskDelay(pdMS_TO_TICKS(30000));
     }
 }
 
@@ -258,7 +297,16 @@ static void llm_worker_task(void *arg)
 
 static lv_obj_t *s_status_label = nullptr;
 static lv_obj_t *s_reply_label = nullptr;
+static lv_obj_t *s_hint_label = nullptr;
 static char s_status_text[192] = "starting...";
+
+/* 点击屏幕：触发提问 / 打断当前请求 */
+static void screen_click_cb(lv_event_t *e)
+{
+    (void)e;
+    ESP_LOGI(TAG, "tap detected");
+    xSemaphoreGive(s_trigger_sem);
+}
 
 static void ui_timer_cb(lv_timer_t *timer)
 {
@@ -269,11 +317,13 @@ static void ui_timer_cb(lv_timer_t *timer)
 
     if (xSemaphoreTake(s_reply_lock, portMAX_DELAY) == pdTRUE) {
         if (s_last_error[0] != '\0') {
-            snprintf(s_status_text, sizeof(s_status_text), "error: %.150s", s_last_error);
+            snprintf(s_status_text, sizeof(s_status_text), "round %d | error: %.120s", s_round,
+                     s_last_error);
         } else if (s_request_busy) {
-            snprintf(s_status_text, sizeof(s_status_text), "LLM streaming...");
+            snprintf(s_status_text, sizeof(s_status_text), "round %d | LLM streaming...", s_round);
         } else {
-            snprintf(s_status_text, sizeof(s_status_text), "LLM idle");
+            snprintf(s_status_text, sizeof(s_status_text), "round %d | LLM idle | tap to ask",
+                     s_round);
         }
         lv_label_set_text(s_status_label, s_status_text);
         lv_label_set_text(s_reply_label, s_reply_buf);
@@ -295,6 +345,12 @@ static void ui_build(void)
     lv_obj_set_style_text_color(s_status_label, lv_color_hex(0x8fa3c0), 0);
     lv_obj_align(s_status_label, LV_ALIGN_TOP_LEFT, 0, 0);
 
+    /* 触摸提示行 */
+    s_hint_label = lv_label_create(scr);
+    lv_label_set_text(s_hint_label, "tap screen to ask / interrupt");
+    lv_obj_set_style_text_color(s_hint_label, lv_color_hex(0x55607a), 0);
+    lv_obj_align(s_hint_label, LV_ALIGN_TOP_RIGHT, 0, 0);
+
     /* 回复区 */
     s_reply_label = lv_label_create(scr);
     lv_label_set_text(s_reply_label, "");
@@ -305,6 +361,9 @@ static void ui_build(void)
     lv_obj_align(s_reply_label, LV_ALIGN_TOP_LEFT, 0, 40);
     lv_obj_set_height(s_reply_label, lv_pct(80));
     lv_obj_set_style_text_line_space(s_reply_label, 6, 0);
+
+    /* 全屏触摸：点击提问 / 打断 */
+    lv_obj_add_event_cb(scr, screen_click_cb, LV_EVENT_CLICKED, nullptr);
 
     otool_lvgl_port_unlock();
 
@@ -318,6 +377,8 @@ extern "C" void llm_app_start(void *tab5_comp)
     s_tab5_comp = tab5_comp;
     s_wifi_events = xEventGroupCreate();
     s_reply_lock = xSemaphoreCreateMutex();
+    s_request_lock = xSemaphoreCreateMutex();
+    s_trigger_sem = xSemaphoreCreateCounting(4, 0);
 
     ui_build();
 

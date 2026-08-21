@@ -636,7 +636,7 @@ esp_err_t otool_llm_voice_session_close(...);
 
 ## 17. 实施进度记录
 
-> 本节由执行 agent 维护：每完成一个 WP 追加真实命令与结果。当前状态：**WP0–WP3 完成**，WP4 进行中。
+> 本节由执行 agent 维护：每完成一个 WP 追加真实命令与结果。当前状态：**WP0–WP6 完成**（WP4 以设备直连豆包线上接口验证，未使用本地 server；WSL 路径已放弃，见 WP4 说明），WP7 部分完成。
 
 ### WP0 安全清理与基线（完成）
 
@@ -729,10 +729,47 @@ $ ./host_tests.exe
 
 测试工具：TinyCC 0.9.27（`%TEMP%\tcc`，宿主无 gcc/clang/MSVC）。测试期间发现并修复：tcc 对 `#pragma once` 行为异常 → 全部头文件改用经典 include guard；PowerShell 写文件引入 UTF-8 BOM → 已剥离（`otool_llm_sdk` 下文件保持无 BOM）。
 
-### WP4 HTTP/TLS/cancel（进行中）
+### WP4 HTTP/TLS/cancel（完成，验证方式变更）
 
-- `http_stream.c` 已实现：`esp_http_client` + `esp_crt_bundle_attach`、connect 阶段用 `connect_timeout_ms` 并在 `HTTP_EVENT_ON_CONNECTED` 切换 `read_timeout_ms`、Content-Type 校验（`text/event-stream` 前缀）、非 2xx 有界错误体（超限告警不截断静默）、`x-request-id`/`Retry-After` 头收集、取消经 `esp_http_client_close()`（决策见 WP1）、`buffer_size_tx` 覆盖请求体上限、请求体/Authorization 不进日志。
-- 待办：本地可控 SSE server 测试（任意 chunk、慢响应、提前断开、401/429/500、错误 JSON、取消），随后公网 smoke test。
+- `http_stream.c` 已实现：`esp_http_client` + `esp_crt_bundle_attach`、connect 阶段用 `connect_timeout_ms` 并在 `HTTP_EVENT_ON_CONNECTED` 切换 `read_timeout_ms`、Content-Type 校验（`text/event-stream` 前缀）、非 2xx 有界错误体（超限告警不截断静默）、`x-request-id`/`Retry-After` 头收集（Retry-After 追加进 ERROR message）、取消经 `esp_http_client_close()`（决策见 WP1）、`buffer_size_tx` 覆盖请求体上限、请求体/Authorization 不进日志。
+- 本地可控 server（`test_apps/local_sse_server.py`，端点 /ok /chat /slow /401 /429 /500 /badtype /half /oversize /errorjson /eof-no-terminal /multi-choice）与 `test_apps/transport_test`（linux/esp32 双目标测试 app）已就绪。
+- **验证方式变更（用户指令）**：不做本地/linux-target 构建验证，直接以设备连接**豆包线上接口**做真实 smoke（见 WP5）。WSL 中的 esp-idf 安装已弃用（WSL 关闭）。
+
+### WP5 双 provider live smoke test（完成：Ark Responses 真机验证）
+
+- 用户授权直接调用豆包接口（仅 `doubao-seed-2-1-turbo-260628`，预算 10 元），并允许密钥入库/入远程仓库。
+- `test_apps/doubao_live_probe.py`：Python 直连探针，录制脱敏 fixture。
+- **真实协议事实（2026-08-22 实测）**：
+  1. Ark `/api/v3/responses` 流式事件：`response.created → in_progress → output_item.added → reasoning_summary_part.added → reasoning_summary_text.delta×N → done → output_item.done → output_item.added → content_part.added → output_text.delta×N → output_text.done → content_part.done → output_item.done → response.completed/incomplete → data:[DONE]`。
+  2. **方舟在 Responses 流末尾也发送 `data: [DONE]`**（OpenAI 官方 Responses 不发送）——首次真机运行发现 adapter 将其当 JSON 解析报错，已修复（responses_sse.c 忽略该标记，不伪造完成事件），并新增宿主回归测试（§15.6 差异测试）。
+  3. `response.incomplete` 的 reason 值为 `"length"`（OpenAI 为 `max_output_tokens`），且带 usage；模型 reasoning 可能占满 max_output_tokens 导致无正文（实测 2048 仍可能被占满）。
+  4. Ark Chat `/chat/completions`：标准 choices 流 + usage chunk + `[DONE]`，与 adapter 兼容。
+- 真机（Tab5/C6）端到端结果见 WP6。
+
+### WP6 应用接入（完成）
+
+`main/llm_app.cpp` 实现：
+
+- **网络**：ESP-Hosted（C6 SDIO 4-bit，GPIO 8-13/15）+ 自动 STA 连接（Kconfig：`OTOOL_WIFI_SSID=xiaomibe72` / `OTOOL_WIFI_PASSWORD=1234567890`），断线自动重连（最多 10 次）；
+- **关键修复**：C6 供电由 IO 扩展器 `WLAN_PWR_EN`（ADDR_HIGH 0x44 P0）控制，hosted init 前必须 `comp->wlan_power(true)` + 1s 延时（参考工程 c145_tab5_wifi_module_update_ui_project 的启动顺序；缺失时 SDIO `send_op_cond` 超时）；
+- **LLM worker**：专用 task（core 1，16KB stack）阻塞执行 SDK 请求；回调只把 delta 拷入互斥保护的 4KB 共享 buffer，LVGL timer（100ms）同步到界面——LVGL 帧率/触摸不被网络阻塞（§5.4 线程契约落实）；
+- **交互**：点击屏幕立即提问/打断当前请求（真实使用 SDK 跨任务 `otool_llm_request_cancel`，取消后自动进入下一轮）；
+- **UI**：状态行（round 序号 + streaming/idle/error）+ 回复区（SourceHanSansSC 16 CJK 字体，自动换行）+ 触摸提示。
+
+真机验证（COM3，串口日志摘录）：
+
+```
+I (9796) llm_app: got ip: 192.168.100.193
+I (41239) llm_app: response started: resp_021787337475480185f554c98e4e9934305289bae83dd856d8b90
+I (53675) llm_app: text done
+I (53690) llm_app: usage: in=55 out=638 total=693
+I (53690) llm_app: completed
+I (53692) llm_app: round 0 done: ESP_OK, reply_len=186
+```
+
+连续多轮 completed（reply_len 135–190 字节中文回复），usage 正常上报，每轮自动提问；点击打断路径编译通过待实机点击确认。
+
+**硬件注意（现场记录）**：USB 供电下偶发 `HP_SYS_HP_WDT_RESET`（电压瞬跌，非软件缺陷）。缓解：调试期关闭 brownout 检测 + `esp_wifi_set_max_tx_power(40)`（10 dBm）后复位频率从 ~1 次/分钟降到 ~6.5 分钟 1 次，随后观察 150s 内 0 复位。量产建议换稳定电源并恢复 brownout 检测。
 
 ### 待办与风险
 
