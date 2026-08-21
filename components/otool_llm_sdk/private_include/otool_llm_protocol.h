@@ -10,6 +10,7 @@
 #include "otool_llm_provider.h"
 #include "otool_llm_sdk.h"
 #include "otool_llm_text.h"
+#include "otool_llm_tools.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -41,7 +42,29 @@ typedef struct {
     float temperature;
     bool temperature_is_set;
     bool store;
+    const otool_llm_tool_definition_t *tools;   /**< NULL/0 = none */
+    size_t tool_count;
+    const otool_llm_tool_output_t *tool_outputs; /**< NULL/0 = none */
+    size_t tool_output_count;
 } otool_llm_request_view_t;
+
+/**
+ * @brief One streaming function call being accumulated (per output_index).
+ */
+typedef struct {
+    bool active;            /**< Slot in use */
+    bool arguments_done;    /**< Complete arguments received (done event or item done) */
+    uint32_t output_index;
+    char item_id[64];
+    char call_id[64];
+    char name[64];
+    char arguments[4096];   /**< Accumulated arguments JSON (bounded) */
+    size_t arguments_len;
+} otool_llm_pending_tool_call_t;
+
+#ifndef CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS
+#define CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS 2
+#endif
 
 /**
  * @brief Responses adapter private state.
@@ -49,6 +72,7 @@ typedef struct {
 typedef struct {
     bool started;            /**< response.created seen */
     bool text_done;          /**< response.output_text.done seen */
+    otool_llm_pending_tool_call_t tool_calls[CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS];
 } otool_llm_responses_state_t;
 
 /**

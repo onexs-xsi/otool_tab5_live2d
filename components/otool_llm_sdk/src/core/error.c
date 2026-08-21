@@ -33,6 +33,22 @@ const char *otool_llm_err_to_name(esp_err_t err)
         return "OTOOL_LLM_ERR_BUSY";
     case OTOOL_LLM_ERR_TERMINATED:
         return "OTOOL_LLM_ERR_TERMINATED";
+    case OTOOL_LLM_ERR_TOOL_NOT_FOUND:
+        return "OTOOL_LLM_ERR_TOOL_NOT_FOUND";
+    case OTOOL_LLM_ERR_TOOL_SCHEMA:
+        return "OTOOL_LLM_ERR_TOOL_SCHEMA";
+    case OTOOL_LLM_ERR_TOOL_ARGUMENTS:
+        return "OTOOL_LLM_ERR_TOOL_ARGUMENTS";
+    case OTOOL_LLM_ERR_TOOL_OUTPUT_TOO_LARGE:
+        return "OTOOL_LLM_ERR_TOOL_OUTPUT_TOO_LARGE";
+    case OTOOL_LLM_ERR_TOOL_FAILED:
+        return "OTOOL_LLM_ERR_TOOL_FAILED";
+    case OTOOL_LLM_ERR_TOOL_DENIED:
+        return "OTOOL_LLM_ERR_TOOL_DENIED";
+    case OTOOL_LLM_ERR_AGENT_LIMIT:
+        return "OTOOL_LLM_ERR_AGENT_LIMIT";
+    case OTOOL_LLM_ERR_CONTEXT_FULL:
+        return "OTOOL_LLM_ERR_CONTEXT_FULL";
     default:
         return "OTOOL_LLM_ERR_UNKNOWN";
     }

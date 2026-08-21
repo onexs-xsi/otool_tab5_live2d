@@ -827,7 +827,39 @@ Gate：提交 ADR 和最小协议探针；未完成前不把语音代码混入 A
 
 ## 20. 实施进度记录
 
-### 2026-08-22 — WP0（完成）+ WP1（进行中）
+### 2026-08-22 — WP2（完成：Responses 工具调用 adapter）
+
+改动：
+
+- 新增 `include/otool_llm_tools.h`：`otool_llm_tool_definition_t`（name/description/schema/strict/flags/timeout/execute）、`otool_llm_tool_output_t`（function_call_output）；
+- `include/otool_llm_sdk.h`：新增错误码 `TOOL_NOT_FOUND/TOOL_SCHEMA/TOOL_ARGUMENTS/TOOL_OUTPUT_TOO_LARGE/TOOL_FAILED/TOOL_DENIED/AGENT_LIMIT/CONTEXT_FULL`；
+- `include/otool_llm_text.h`：请求新增 `tools/tool_count/tool_outputs/tool_output_count`；事件新增 `TOOL_CALL_STARTED/TOOL_ARGUMENTS_DELTA/TOOL_CALL_DONE`；
+- `private_include/otool_llm_protocol.h`：request_view 增加工具字段；`otool_llm_pending_tool_call_t`（按 output_index 的槽位，arguments 上限 4096）；
+- `src/protocols/responses_sse.c`：
+  - 请求序列化：`tools[]`（type/name/description/parameters/strict）、`tool_choice:auto`、`parallel_tool_calls:false`、input 追加 `function_call_output` item；
+  - 事件解析：`output_item.added(function_call)` → 槽位分配 + TOOL_CALL_STARTED；`function_call_arguments.delta`（允许空串，按 output_index 关联，无 call_id 也能工作——Ark 实测）→ 追加 + TOOL_ARGUMENTS_DELTA；`function_call_arguments.done` → 与累计拼接一致性校验 + TOOL_CALL_DONE；`output_item.done` 容错补发并回收槽位；
+  - `response.completed/incomplete` 前检查残留半工具调用 → ERROR(PROTOCOL)；
+- `src/core/request.c`：tools/tool_outputs 深拷贝（含全部失败路径释放）、Chat 协议收到工具字段明确拒绝（WP5 前）、view 填充；
+- `Kconfig`：`OTOOL_LLM_MAX_TOOLS=8`、`OTOOL_LLM_MAX_PENDING_TOOL_CALLS=2`、`OTOOL_LLM_MAX_TOOL_ARGUMENT_BYTES=4096`、`OTOOL_LLM_MAX_TOOL_OUTPUT_BYTES=4096`。
+
+协议事实（Ark 实测，`test_apps/ark_tool_probe.py`）：
+
+- 事件序列：`output_item.added(function_call)` → `function_call_arguments.delta`×N（首片可为空串）→ `function_call_arguments.done`（完整 arguments）→ `output_item.done` → `response.completed`；
+- **Ark 的 arguments.delta/done 事件不含 call_id**（OpenAI 有），必须按 `output_index`+`item_id` 关联；
+- done 的完整 arguments 与 delta 拼接一致（`{"city": "北京"}` 18 字节）。
+
+验证：
+
+- host 测试新增 4 组：完整工具流（started/空 delta/中文 delta/done 一致性/item done/completed）、done 不一致 → ERROR(PROTOCOL)、终止时半工具调用 → ERROR(PROTOCOL)、带 tools 的请求序列化；`1332 checks, 0 failures`；
+- 固件：`idf.py build` → Project build complete（0x2ea230）；
+- 提交：`见 git log（WP2）`。
+
+剩余风险：
+
+- Chat 工具调用（WP5）当前显式拒绝；
+- OpenAI 真机工具调用未测（无 OpenAI 凭证，WP8 时评估）；
+
+### 2026-08-22 — WP0（完成）+ WP1（完成）
 
 改动：
 

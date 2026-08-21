@@ -724,9 +724,8 @@ static void test_responses_unknown_events_tolerated(void)
     CHECK(feed_adapter(ops, ctx, "response.output_item.added",
                        "{\"type\":\"response.output_item.added\",\"output_index\":0}") == ESP_OK,
           "unknown 1");
-    CHECK(feed_adapter(ops, ctx, "response.function_call_arguments.delta",
-                       "{\"type\":\"response.function_call_arguments.delta\",\"delta\":\"{\\\"a\\\"\"}") ==
-              ESP_OK,
+    CHECK(feed_adapter(ops, ctx, "response.custom_event",
+                       "{\"type\":\"response.custom_event\",\"delta\":\"{\\\"a\\\"\"}") == ESP_OK,
           "unknown 2");
     CHECK(feed_adapter(ops, ctx, "response.reasoning_summary_text.delta",
                        "{\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"think\"}") ==
@@ -811,6 +810,170 @@ static void test_responses_on_eof(void)
     CHECK_EQ(col.events[0].data.error.code, OTOOL_LLM_ERR_PROTOCOL_EOF);
     free_collector(&col);
     free(ctx);
+}
+
+/* ---- WP2: responses tool calling tests ---- */
+
+static void test_responses_tool_call_flow(void)
+{
+    /* Ark 真实事件结构（ark_tool_probe.py 录制，字段脱敏）：
+     * output_item.added(function_call) → function_call_arguments.delta ×3（含空串）
+     * → function_call_arguments.done → output_item.done(function_call) → completed */
+    otool_llm_protocol_ops_t *ops = (otool_llm_protocol_ops_t *)&otool_llm_protocol_responses;
+    otool_llm_exec_ctx_t *ctx = make_ctx();
+    collector_t col = { 0 };
+    ctx->user_ctx = &col;
+    ctx->emit = collector_emit;
+
+    const char *added =
+        "{\"type\":\"response.output_item.added\",\"output_index\":1,"
+        "\"item\":{\"id\":\"item_abc\",\"call_id\":\"call_xyz\",\"name\":\"get_weather\","
+        "\"type\":\"function_call\",\"status\":\"in_progress\"}}";
+    CHECK(feed_adapter(ops, ctx, "response.output_item.added", added) == ESP_OK, "tool item added");
+    CHECK_EQ(col.count, 1);
+    CHECK(col.events[0].type == OTOOL_LLM_TEXT_EVENT_TOOL_CALL_STARTED, "tool started");
+    CHECK_EQ(col.events[0].data.tool_call_started.output_index, 1);
+    CHECK_STR(col.events[0].data.tool_call_started.call_id, "call_xyz");
+    CHECK_STR(col.events[0].data.tool_call_started.name, "get_weather");
+    CHECK_STR(col.events[0].data.tool_call_started.item_id, "item_abc");
+
+    /* 空 delta + 中文分片 */
+    CHECK(feed_adapter(ops, ctx, "response.function_call_arguments.delta",
+                       "{\"type\":\"response.function_call_arguments.delta\",\"delta\":\"\","
+                       "\"item_id\":\"item_abc\",\"output_index\":1}") == ESP_OK, "empty delta");
+    CHECK(feed_adapter(ops, ctx, "response.function_call_arguments.delta",
+                       "{\"type\":\"response.function_call_arguments.delta\",\"delta\":\"{\\\"city\\\": \\\"\","
+                       "\"item_id\":\"item_abc\",\"output_index\":1}") == ESP_OK, "delta 1");
+    CHECK(feed_adapter(ops, ctx, "response.function_call_arguments.delta",
+                       "{\"type\":\"response.function_call_arguments.delta\",\"delta\":\"北京\","
+                       "\"item_id\":\"item_abc\",\"output_index\":1}") == ESP_OK, "delta 2");
+    CHECK(feed_adapter(ops, ctx, "response.function_call_arguments.delta",
+                       "{\"type\":\"response.function_call_arguments.delta\",\"delta\":\"\\\"}\","
+                       "\"item_id\":\"item_abc\",\"output_index\":1}") == ESP_OK, "delta 3");
+    /* started(0) + 空 delta(1) + d1(2) + d2(3) + d3(4) = 5 */
+    CHECK_EQ(col.count, 5);
+    CHECK(col.events[1].type == OTOOL_LLM_TEXT_EVENT_TOOL_ARGUMENTS_DELTA, "args delta 1");
+    CHECK_EQ(col.events[1].data.tool_arguments_delta.delta_len, 0);
+    CHECK_STR(col.events[3].data.tool_arguments_delta.delta, "北京");
+    CHECK_EQ(col.events[3].data.tool_arguments_delta.delta_len, 6);
+    CHECK_STR(col.events[4].data.tool_arguments_delta.delta, "\"}");
+    CHECK_EQ(col.events[4].data.tool_arguments_delta.delta_len, 2);
+
+    /* done：完整 arguments 与累计一致（{"city": "北京"} = 10+6+2 = 18 字节） */
+    CHECK(feed_adapter(ops, ctx, "response.function_call_arguments.done",
+                       "{\"type\":\"response.function_call_arguments.done\","
+                       "\"arguments\":\"{\\\"city\\\": \\\"北京\\\"}\","
+                       "\"item_id\":\"item_abc\",\"output_index\":1}") == ESP_OK, "args done");
+    CHECK_EQ(col.count, 6);
+    CHECK(col.events[5].type == OTOOL_LLM_TEXT_EVENT_TOOL_CALL_DONE, "tool done");
+    CHECK_STR(col.events[5].data.tool_call_done.arguments, "{\"city\": \"北京\"}");
+    CHECK_EQ(col.events[5].data.tool_call_done.arguments_len, 18);
+    CHECK_STR(col.events[5].data.tool_call_done.name, "get_weather");
+
+    /* output_item.done 回收槽位 */
+    CHECK(feed_adapter(ops, ctx, "response.output_item.done",
+                       "{\"type\":\"response.output_item.done\",\"output_index\":1,"
+                       "\"item\":{\"arguments\":\"{\\\"city\\\": \\\"北京\\\"}\",\"call_id\":\"call_xyz\","
+                       "\"name\":\"get_weather\",\"type\":\"function_call\",\"status\":\"completed\"}}") ==
+              ESP_OK,
+          "item done");
+    CHECK_EQ(col.count, 6); /* 无新事件 */
+
+    /* completed 正常终止 */
+    CHECK(feed_adapter(ops, ctx, "response.completed",
+                       "{\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}") ==
+              ESP_OK,
+          "completed");
+    CHECK(col.events[6].type == OTOOL_LLM_TEXT_EVENT_COMPLETED, "completed event");
+    CHECK(ctx->terminal_sent, "terminal set");
+
+    free_collector(&col);
+    free(ctx);
+}
+
+static void test_responses_tool_arguments_mismatch(void)
+{
+    /* done 的完整 arguments 与累计 delta 不一致 → 协议错误 */
+    otool_llm_protocol_ops_t *ops = (otool_llm_protocol_ops_t *)&otool_llm_protocol_responses;
+    otool_llm_exec_ctx_t *ctx = make_ctx();
+    collector_t col = { 0 };
+    ctx->user_ctx = &col;
+    ctx->emit = collector_emit;
+
+    CHECK(feed_adapter(ops, ctx, "response.output_item.added",
+                       "{\"type\":\"response.output_item.added\",\"output_index\":0,"
+                       "\"item\":{\"call_id\":\"c1\",\"name\":\"t\",\"type\":\"function_call\"}}") == ESP_OK,
+          "added");
+    CHECK(feed_adapter(ops, ctx, "response.function_call_arguments.delta",
+                       "{\"type\":\"response.function_call_arguments.delta\",\"delta\":\"{\\\"a\\\":1}\","
+                       "\"output_index\":0}") == ESP_OK, "delta");
+    /* 不一致的 done → ERROR(PROTOCOL)；事件：started(0)+delta(1)+error(2) */
+    CHECK(feed_adapter(ops, ctx, "response.function_call_arguments.done",
+                       "{\"type\":\"response.function_call_arguments.done\",\"arguments\":\"{\\\"b\\\":2}\","
+                       "\"output_index\":0}") != ESP_OK, "mismatch rejected");
+    CHECK_EQ(col.count, 3);
+    CHECK(col.events[2].type == OTOOL_LLM_TEXT_EVENT_ERROR, "error event");
+    CHECK_EQ(col.events[2].data.error.code, OTOOL_LLM_ERR_PROTOCOL);
+    CHECK(ctx->terminal_sent, "terminal set");
+    free_collector(&col);
+    free(ctx);
+}
+
+static void test_responses_tool_half_call_at_terminal(void)
+{
+    /* completed 时仍有未完成工具调用 → 协议错误 */
+    otool_llm_protocol_ops_t *ops = (otool_llm_protocol_ops_t *)&otool_llm_protocol_responses;
+    otool_llm_exec_ctx_t *ctx = make_ctx();
+    collector_t col = { 0 };
+    ctx->user_ctx = &col;
+    ctx->emit = collector_emit;
+
+    CHECK(feed_adapter(ops, ctx, "response.output_item.added",
+                       "{\"type\":\"response.output_item.added\",\"output_index\":0,"
+                       "\"item\":{\"call_id\":\"c1\",\"name\":\"t\",\"type\":\"function_call\"}}") == ESP_OK,
+          "added");
+    CHECK(feed_adapter(ops, ctx, "response.completed",
+                       "{\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}") != ESP_OK,
+          "completed with half call rejected");
+    CHECK(col.events[1].type == OTOOL_LLM_TEXT_EVENT_ERROR, "error event");
+    CHECK_EQ(col.events[1].data.error.code, OTOOL_LLM_ERR_PROTOCOL);
+    free_collector(&col);
+    free(ctx);
+}
+
+static void test_responses_build_request_with_tools(void)
+{
+    otool_llm_protocol_ops_t *ops = (otool_llm_protocol_ops_t *)&otool_llm_protocol_responses;
+    otool_llm_request_view_t view = make_view();
+    static const otool_llm_tool_definition_t tools[] = {
+        {
+            .struct_size = sizeof(otool_llm_tool_definition_t),
+            .name = "get_weather",
+            .description = "Get current weather for a city",
+            .parameters_json_schema =
+                "{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},"
+                "\"required\":[\"city\"],\"additionalProperties\":false}",
+            .strict = true,
+        },
+    };
+    static const otool_llm_tool_output_t outputs[] = {
+        { .call_id = "call_xyz", .output = "{\"ok\":true,\"result\":{\"temp\":25}}" },
+    };
+    view.tools = tools;
+    view.tool_count = 1;
+    view.tool_outputs = outputs;
+    view.tool_output_count = 1;
+
+    char buf[8192];
+    size_t len = 0;
+    const otool_llm_provider_preset_t *provider = otool_llm_provider_get(OTOOL_LLM_PROVIDER_OPENAI);
+    CHECK(ops->build_request(&view, provider, buf, sizeof(buf), &len) == ESP_OK, "build with tools");
+    CHECK(strstr(buf, "\"tools\":[{\"type\":\"function\",\"name\":\"get_weather\"") != NULL,
+          "tool def in body");
+    CHECK(strstr(buf, "\"tool_choice\":\"auto\"") != NULL, "tool_choice auto");
+    CHECK(strstr(buf, "\"parallel_tool_calls\":false") != NULL, "parallel false");
+    CHECK(strstr(buf, "\"type\":\"function_call_output\"") != NULL, "tool output item");
+    CHECK(strstr(buf, "\"call_id\":\"call_xyz\"") != NULL, "output call_id");
 }
 
 /* ---- chat adapter tests ---- */
@@ -1034,37 +1197,42 @@ static void test_protocol_resolve(void)
 
 int main(void)
 {
-    test_sse_basic();
-    test_sse_line_endings();
-    test_sse_multi_data();
-    test_sse_comment_unknown_retry();
-    test_sse_event_name_and_id();
-    test_sse_empty_data_no_dispatch();
-    test_sse_multiple_events_one_chunk();
-    test_sse_value_leading_space();
-    test_sse_sharding();
-    test_sse_byte_sharding();
-    test_sse_cap_and_overflow();
-    test_sse_eof_half_event();
-    test_sse_crlf_mixed();
-    test_sse_crlf_across_feed_boundary();
+    setvbuf(stdout, NULL, _IONBF, 0);
+    puts("t:sse_basic"); test_sse_basic();
+    puts("t:line_endings"); test_sse_line_endings();
+    puts("t:multi_data"); test_sse_multi_data();
+    puts("t:comment"); test_sse_comment_unknown_retry();
+    puts("t:event_id"); test_sse_event_name_and_id();
+    puts("t:empty"); test_sse_empty_data_no_dispatch();
+    puts("t:multi_events"); test_sse_multiple_events_one_chunk();
+    puts("t:leading_space"); test_sse_value_leading_space();
+    puts("t:sharding"); test_sse_sharding();
+    puts("t:byte_sharding"); test_sse_byte_sharding();
+    puts("t:cap"); test_sse_cap_and_overflow();
+    puts("t:eof_half"); test_sse_eof_half_event();
+    puts("t:crlf_mixed"); test_sse_crlf_mixed();
+    puts("t:crlf_across"); test_sse_crlf_across_feed_boundary();
 
-    test_responses_happy_path();
-    test_responses_incomplete();
-    test_responses_failed_and_error_events();
-    test_responses_unknown_events_tolerated();
-    test_responses_ark_done_marker();
-    test_responses_bad_json_and_types();
-    test_responses_on_eof();
+    puts("t:resp_happy"); test_responses_happy_path();
+    puts("t:resp_incomplete"); test_responses_incomplete();
+    puts("t:resp_failed"); test_responses_failed_and_error_events();
+    puts("t:resp_unknown"); test_responses_unknown_events_tolerated();
+    puts("t:resp_done"); test_responses_ark_done_marker();
+    puts("t:resp_badjson"); test_responses_bad_json_and_types();
+    puts("t:resp_eof"); test_responses_on_eof();
+    puts("t:resp_tool_flow"); test_responses_tool_call_flow();
+    puts("t:resp_tool_mismatch"); test_responses_tool_arguments_mismatch();
+    puts("t:resp_tool_half"); test_responses_tool_half_call_at_terminal();
+    puts("t:resp_build_tools"); test_responses_build_request_with_tools();
 
-    test_chat_happy_path();
-    test_chat_multiple_choices_rejected();
-    test_chat_error_event_and_done_eof();
-    test_chat_invalid_json();
+    puts("t:chat_happy"); test_chat_happy_path();
+    puts("t:chat_multi"); test_chat_multiple_choices_rejected();
+    puts("t:chat_error"); test_chat_error_event_and_done_eof();
+    puts("t:chat_badjson"); test_chat_invalid_json();
 
-    test_provider_error_parsers();
-    test_provider_auth_headers();
-    test_protocol_resolve();
+    puts("t:provider_err"); test_provider_error_parsers();
+    puts("t:provider_auth"); test_provider_auth_headers();
+    puts("t:resolve"); test_protocol_resolve();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

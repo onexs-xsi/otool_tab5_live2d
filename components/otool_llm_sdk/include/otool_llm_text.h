@@ -8,6 +8,7 @@
 #define OTOOL_LLM_TEXT_H
 
 #include "otool_llm_sdk.h"
+#include "otool_llm_tools.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -52,6 +53,11 @@ typedef struct {
     float temperature;                  /**< Only sent when temperature_is_set is true */
     bool temperature_is_set;
     bool store;                         /**< Responses only; default false. Rejected for Chat protocol. */
+    /* ---- function calling (Responses) ---- */
+    const otool_llm_tool_definition_t *tools;   /**< Tool definitions; NULL/0 = none */
+    size_t tool_count;
+    const otool_llm_tool_output_t *tool_outputs; /**< function_call_output items appended to input; NULL/0 = none */
+    size_t tool_output_count;
 } otool_llm_text_request_t;
 
 /**
@@ -67,6 +73,10 @@ typedef enum {
     OTOOL_LLM_TEXT_EVENT_INCOMPLETE,           /**< Ended due to token/content limits (terminal) */
     OTOOL_LLM_TEXT_EVENT_CANCELLED,            /**< Local cancel finished (terminal) */
     OTOOL_LLM_TEXT_EVENT_ERROR,                /**< Transport/TLS/HTTP/provider/JSON/protocol error (terminal) */
+    /* ---- function calling (Responses) ---- */
+    OTOOL_LLM_TEXT_EVENT_TOOL_CALL_STARTED,    /**< function_call item announced */
+    OTOOL_LLM_TEXT_EVENT_TOOL_ARGUMENTS_DELTA, /**< Arguments JSON increment (may be empty) */
+    OTOOL_LLM_TEXT_EVENT_TOOL_CALL_DONE,       /**< Arguments complete; execute the tool */
 } otool_llm_text_event_type_t;
 
 /**
@@ -103,6 +113,26 @@ typedef struct {
         struct {
             const char *reason;      /**< e.g. "max_output_tokens"; may be NULL */
         } incomplete;
+        /* function calling */
+        struct {
+            uint32_t output_index;   /**< Item slot in the current turn */
+            const char *item_id;     /**< May be NULL */
+            const char *call_id;     /**< May be NULL (Ark delta events omit it) */
+            const char *name;        /**< Tool name; may be NULL until resolved */
+        } tool_call_started;
+        struct {
+            uint32_t output_index;
+            const char *call_id;     /**< May be NULL (Ark delta events omit it) */
+            const char *delta;       /**< Arguments JSON increment; may be empty */
+            size_t delta_len;
+        } tool_arguments_delta;
+        struct {
+            uint32_t output_index;
+            const char *call_id;     /**< May be NULL */
+            const char *name;        /**< Tool name; may be NULL */
+            const char *arguments;   /**< Complete arguments JSON (valid until callback returns) */
+            size_t arguments_len;
+        } tool_call_done;
     } data;
 } otool_llm_text_event_t;
 

@@ -20,6 +20,9 @@ static const char *TAG = "otool_llm_request";
 #ifndef CONFIG_OTOOL_LLM_MAX_REQUEST_BYTES
 #define CONFIG_OTOOL_LLM_MAX_REQUEST_BYTES 32768
 #endif
+#ifndef CONFIG_OTOOL_LLM_MAX_TOOLS
+#define CONFIG_OTOOL_LLM_MAX_TOOLS 8
+#endif
 
 /* ---------------- role helpers ---------------- */
 
@@ -203,6 +206,30 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
             ESP_LOGE(TAG, "store is not supported by the Chat protocol");
             return OTOOL_LLM_ERR_UNSUPPORTED;
         }
+        if (request->tool_count > 0 || request->tool_output_count > 0) {
+            /* Chat 工具调用在 WP5 实现；当前拒绝而非静默丢弃 */
+            ESP_LOGE(TAG, "tools/tool_outputs are not supported by the Chat protocol yet");
+            return OTOOL_LLM_ERR_UNSUPPORTED;
+        }
+    }
+    if (request->tool_count > 0) {
+        if (request->tools == NULL) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        if (request->tool_count > CONFIG_OTOOL_LLM_MAX_TOOLS) {
+            ESP_LOGE(TAG, "tool_count %u > OTOOL_LLM_MAX_TOOLS %u", (unsigned)request->tool_count,
+                     (unsigned)CONFIG_OTOOL_LLM_MAX_TOOLS);
+            return OTOOL_LLM_ERR_TOOL_SCHEMA;
+        }
+        for (size_t i = 0; i < request->tool_count; i++) {
+            if (request->tools[i].name == NULL || request->tools[i].name[0] == '\0' ||
+                request->tools[i].parameters_json_schema == NULL) {
+                return OTOOL_LLM_ERR_TOOL_SCHEMA;
+            }
+        }
+    }
+    if (request->tool_output_count > 0 && request->tool_outputs == NULL) {
+        return ESP_ERR_INVALID_ARG;
     }
 
     otool_llm_request_handle_t r = (otool_llm_request_handle_t)calloc(1, sizeof(*r));
@@ -235,7 +262,73 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
             }
         }
     }
+    /* 深拷贝工具定义（WP2） */
+    if (err == ESP_OK && request->tool_count > 0) {
+        r->tools = (otool_llm_tool_definition_t *)calloc(request->tool_count, sizeof(*r->tools));
+        if (r->tools == NULL) {
+            err = ESP_ERR_NO_MEM;
+        } else {
+            for (size_t i = 0; i < request->tool_count; i++) {
+                r->tools[i].struct_size = sizeof(*r->tools);
+                r->tools[i].strict = request->tools[i].strict;
+                r->tools[i].flags = request->tools[i].flags;
+                r->tools[i].timeout_ms = request->tools[i].timeout_ms;
+                r->tools[i].max_output_bytes = request->tools[i].max_output_bytes;
+                r->tools[i].execute = request->tools[i].execute;
+                r->tools[i].user_ctx = request->tools[i].user_ctx;
+                err = otool_llm_strdup(request->tools[i].name, (char **)&r->tools[i].name);
+                if (err == ESP_OK) {
+                    err = otool_llm_strdup(request->tools[i].description,
+                                           (char **)&r->tools[i].description);
+                }
+                if (err == ESP_OK) {
+                    err = otool_llm_strdup(request->tools[i].parameters_json_schema,
+                                           (char **)&r->tools[i].parameters_json_schema);
+                }
+                if (err != ESP_OK) {
+                    break;
+                }
+            }
+            if (err == ESP_OK) {
+                r->tool_count = request->tool_count;
+            }
+        }
+    }
+    /* 深拷贝工具输出（function_call_output） */
+    if (err == ESP_OK && request->tool_output_count > 0) {
+        r->tool_outputs = (otool_llm_tool_output_t *)calloc(request->tool_output_count,
+                                                            sizeof(*r->tool_outputs));
+        if (r->tool_outputs == NULL) {
+            err = ESP_ERR_NO_MEM;
+        } else {
+            for (size_t i = 0; i < request->tool_output_count; i++) {
+                err = otool_llm_strdup(request->tool_outputs[i].call_id,
+                                       (char **)&r->tool_outputs[i].call_id);
+                if (err == ESP_OK) {
+                    err = otool_llm_strdup(request->tool_outputs[i].output,
+                                           (char **)&r->tool_outputs[i].output);
+                }
+                if (err != ESP_OK) {
+                    break;
+                }
+            }
+            if (err == ESP_OK) {
+                r->tool_output_count = request->tool_output_count;
+            }
+        }
+    }
     if (err != ESP_OK) {
+        for (size_t i = 0; i < r->tool_output_count; i++) {
+            free((void *)r->tool_outputs[i].output);
+            free((void *)r->tool_outputs[i].call_id);
+        }
+        free((void *)r->tool_outputs);
+        for (size_t i = 0; i < r->tool_count; i++) {
+            free((void *)r->tools[i].parameters_json_schema);
+            free((void *)r->tools[i].description);
+            free((void *)r->tools[i].name);
+        }
+        free((void *)r->tools);
         for (size_t i = 0; i < r->message_count; i++) {
             free((void *)r->messages[i].text);
         }
@@ -254,6 +347,17 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
 
     r->lock = xSemaphoreCreateMutex();
     if (r->lock == NULL) {
+        for (size_t i = 0; i < r->tool_output_count; i++) {
+            free((void *)r->tool_outputs[i].output);
+            free((void *)r->tool_outputs[i].call_id);
+        }
+        free((void *)r->tool_outputs);
+        for (size_t i = 0; i < r->tool_count; i++) {
+            free((void *)r->tools[i].parameters_json_schema);
+            free((void *)r->tools[i].description);
+            free((void *)r->tools[i].name);
+        }
+        free((void *)r->tools);
         for (size_t i = 0; i < r->message_count; i++) {
             free((void *)r->messages[i].text);
         }
@@ -298,6 +402,17 @@ void otool_llm_request_destroy(otool_llm_request_handle_t request)
         xSemaphoreGive(request->client->lock);
     }
 
+    for (size_t i = 0; i < request->tool_output_count; i++) {
+        free((void *)request->tool_outputs[i].output);
+        free((void *)request->tool_outputs[i].call_id);
+    }
+    free((void *)request->tool_outputs);
+    for (size_t i = 0; i < request->tool_count; i++) {
+        free((void *)request->tools[i].parameters_json_schema);
+        free((void *)request->tools[i].description);
+        free((void *)request->tools[i].name);
+    }
+    free((void *)request->tools);
     for (size_t i = 0; i < request->message_count; i++) {
         free((void *)request->messages[i].text);
     }
@@ -357,6 +472,10 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
         .temperature = request->temperature,
         .temperature_is_set = request->temperature_is_set,
         .store = request->store,
+        .tools = request->tools,
+        .tool_count = request->tool_count,
+        .tool_outputs = request->tool_outputs,
+        .tool_output_count = request->tool_output_count,
     };
     otool_llm_exec_ctx_t *ctx = &request->exec;
     memset(ctx, 0, sizeof(*ctx));

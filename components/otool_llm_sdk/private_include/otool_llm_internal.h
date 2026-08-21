@@ -48,6 +48,11 @@ struct otool_llm_request {
     float temperature;
     bool temperature_is_set;
     bool store;
+    /* Function calling (WP2): deep-copied tool definitions and outputs */
+    otool_llm_tool_definition_t *tools;
+    size_t tool_count;
+    otool_llm_tool_output_t *tool_outputs;
+    size_t tool_output_count;
     /* Execution state */
     SemaphoreHandle_t lock;
     bool executing;

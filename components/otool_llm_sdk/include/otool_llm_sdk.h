@@ -43,6 +43,14 @@ typedef enum {
     OTOOL_LLM_ERR_UNSUPPORTED,                     /**< Request field not supported by selected protocol/provider */
     OTOOL_LLM_ERR_BUSY,                            /**< Client already has an in-flight request */
     OTOOL_LLM_ERR_TERMINATED,                      /**< Request has already produced a terminal event */
+    OTOOL_LLM_ERR_TOOL_NOT_FOUND,                  /**< Tool name not registered */
+    OTOOL_LLM_ERR_TOOL_SCHEMA,                     /**< Tool schema invalid / unsupported keywords */
+    OTOOL_LLM_ERR_TOOL_ARGUMENTS,                  /**< Tool arguments invalid or over budget */
+    OTOOL_LLM_ERR_TOOL_OUTPUT_TOO_LARGE,           /**< Tool output exceeds budget */
+    OTOOL_LLM_ERR_TOOL_FAILED,                     /**< Tool callback failed */
+    OTOOL_LLM_ERR_TOOL_DENIED,                     /**< Tool rejected by policy */
+    OTOOL_LLM_ERR_AGENT_LIMIT,                     /**< Agent run limit reached */
+    OTOOL_LLM_ERR_CONTEXT_FULL,                    /**< Local transcript budget exhausted */
 } otool_llm_err_t;
 
 /**

@@ -56,4 +56,32 @@ config OTOOL_LLM_ALLOW_INSECURE_HTTP
         When disabled, client base URLs must start with https:// and TLS with
         the certificate bundle is enforced. Enable only for local test servers.
 
+config OTOOL_LLM_MAX_TOOLS
+    int "Maximum tools per request"
+    default 8
+    range 1 32
+    help
+        Upper bound of tool definitions accepted per request (and per registry later).
+
+config OTOOL_LLM_MAX_PENDING_TOOL_CALLS
+    int "Maximum pending tool calls per turn"
+    default 2
+    range 1 8
+    help
+        Defensive cap for concurrently streaming function calls in one turn.
+
+config OTOOL_LLM_MAX_TOOL_ARGUMENT_BYTES
+    int "Maximum tool arguments size (bytes)"
+    default 4096
+    range 512 32768
+    help
+        Hard cap for one accumulated function_call arguments JSON.
+
+config OTOOL_LLM_MAX_TOOL_OUTPUT_BYTES
+    int "Maximum tool output size (bytes)"
+    default 4096
+    range 512 32768
+    help
+        Hard cap for one tool result returned to the model.
+
 endmenu
