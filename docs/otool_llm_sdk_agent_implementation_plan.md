@@ -988,3 +988,33 @@ Gate：提交 ADR 和最小协议探针；未完成前不把语音代码混入 A
 
 - Chat 协议真机工具闭环未测（Ark Chat 带工具请求需 WP8 live smoke）；
 - transcript 固定 8 条上限，无截断/摘要策略（计划允许 0.4.x 再做）。
+
+### 2026-08-22 — WP8（部分完成：Ark Chat 工具调用真机验证）
+
+改动：
+
+- `main/agent_app.cpp`：协议选择（NVS `otool_cfg/agent_proto`，`responses`（默认，远端链）或 `chat`（本地 transcript））；console 命令 `agent-protocol <responses|chat>`（重启生效）；
+- 新增 `test_apps/ark_chat_tool_probe.py`：Ark Chat 工具调用两轮探针（协议事实 + 工具结果消息回传）。
+
+协议事实（Ark Chat 实测）：
+
+- turn1 流式：`delta.tool_calls[{index,id,type,function:{name,arguments}}]`（首 chunk 带 id+name+空 arguments，后续 chunk 仅 arguments 片段）→ `finish_reason=tool_calls` → `[DONE]`；
+- turn2：`assistant(tool_calls)` + `role:"tool"`（tool_call_id + 结果）→ 正常流式中文回答。
+
+真机验证（COM3，`agent-protocol chat` 后重启）：
+
+```
+[agent] TURN_STARTED turn=1
+[agent] TOOL_CALL_STARTED name=get_device_status   （工具调用）
+[agent] TOOL_EXECUTION_* result={...uptime_s...}
+[agent] TURN_STARTED turn=2                        （tool 消息回传后模型继续）
+[agent] TEXT_DELTA ... "剩余堆内存：26781644 字节（约 25.5MB）... Wi-Fi 连接状态：已连接"
+[agent] RUN_COMPLETED
+```
+
+Gate 达成：Ark Chat 完成真实工具闭环（"用户问题 → 工具调用 → 工具结果 → 最终回答"）。
+
+剩余风险：
+
+- OpenAI Responses 工具调用仍无凭证可测（记录为外部依赖）；
+- Ark Responses 工具闭环（WP6 已真机验证）与 Ark Chat 工具闭环（本轮）均已达成。
