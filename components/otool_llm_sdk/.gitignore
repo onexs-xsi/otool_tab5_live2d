@@ -1,3 +1,7 @@
 test_apps/parser_and_adapters/host_tests.exe
 test_apps/parser_and_adapters/host_tests.def
 
+
+test_apps/parser_and_adapters/agent_host_tests.exe
+test_apps/parser_and_adapters/agent_host_tests.def
+
