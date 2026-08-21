@@ -7,12 +7,12 @@ extern "C" {
 #endif
 
 /**
- * @brief Start the LLM demo app: ESP-Hosted (C6) Wi-Fi + Doubao streaming chat + LVGL UI.
+ * @brief Start the LLM app: Doubao streaming chat + LVGL UI.
  *
- * @param tab5_comp Pointer to the initialized otool_tab5_component (used to
- *                  power the C6 module via WLAN_PWR_EN).
+ * Wi-Fi is managed separately by wifi_app_start(); the LLM worker waits for
+ * the connection before the first request.
  */
-void llm_app_start(void *tab5_comp);
+void llm_app_start(void);
 
 /**
  * @brief Trigger a new LLM round immediately (console/touch entry).

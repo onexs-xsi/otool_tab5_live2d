@@ -2,6 +2,7 @@
 // Commands: help, free, version, wifi status/reconnect, llm ask/cancel/status.
 
 #include "llm_app.h"
+#include "wifi_app.h"
 
 #include "esp_console.h"
 #include "esp_log.h"
@@ -45,13 +46,8 @@ static int do_wifi_reconnect(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
-    esp_err_t err = esp_wifi_disconnect();
-    if (err != ESP_OK) {
-        printf("wifi: disconnect: %s\n", esp_err_to_name(err));
-    }
-    vTaskDelay(pdMS_TO_TICKS(200));
-    err = esp_wifi_connect();
-    printf("wifi: connect -> %s\n", esp_err_to_name(err));
+    esp_err_t err = wifi_app_reconnect();
+    printf("wifi: reconnect -> %s\n", esp_err_to_name(err));
     return 0;
 }
 
