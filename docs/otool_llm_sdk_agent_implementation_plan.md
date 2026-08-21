@@ -827,18 +827,31 @@ Gate：提交 ADR 和最小协议探针；未完成前不把语音代码混入 A
 
 ## 20. 实施进度记录
 
-尚未开始。后续 agent 按 WP 追加记录，格式如下：
-
-```text
-### YYYY-MM-DD — WPx（进行中/完成/阻塞）
+### 2026-08-22 — WP0（完成）+ WP1（进行中）
 
 改动：
-- ...
+
+- WP0 凭证：
+  - `main/Kconfig`：`OTOOL_WIFI_PASSWORD` 默认改为空（真实密码不入库）；`OTOOL_LLM_API_KEY` 保持空默认；Wi-Fi SSID 保留非机密默认并由 NVS 覆盖；
+  - 新增 `main/credential_store.{h,cpp}`：NVS 命名空间 `otool_cred`，键 `wifi_ssid`/`wifi_pass`/`llm_key`，启动时缓存；
+  - console 新增 `cred`（脱敏显示）/ `cred-set <name> <value>` / `cred-clear <name>` 命令；
+  - `wifi_app.cpp` 从 NVS 读 SSID/密码；`llm_app.cpp` 从 NVS 读 API Key，未设置时明确提示并退出 worker；
+  - `main.cpp` 在启动早期调用 `credential_store_init()`。
+- WP1 P0：
+  - P0-1 终端错误返回码：`execute_stream()` 在 terminal 为 ERROR 时返回 `ctx->error_code`（不再一律 ESP_OK）；
+  - P0-2 取消 close-only：`request_cancel_locked()` 只置标志并摘走 HTTP handle，锁外 `esp_http_client_close()`；不再调用会重连的 `esp_http_client_cancel_request()`；callback CANCEL 路径同样处理；
+  - P0-3 SSE CRLF 跨分片：`last_was_cr` 从 `feed()` 局部变量移入 parser 实例（`p->last_was_cr`）。
+- WP1 P1：
+  - `request.c` auth 构建失败路径的 `url` 泄漏（声明提前到函数顶部并统一释放）；
+  - client/request 生命周期：`client->request_count` 引用计数，`request_create` 增加、`request_destroy` 减少，`client_destroy` 在有活跃请求或存活 request handle 时拒绝。
 
 验证：
-- command
-- result
+
+- host 测试：新增 CRLF 跨分片回归（每个分片位置对拍 + finish 干净）；`1286 checks, 0 failures`；
+- 固件：`idf.py build` → Project build complete，`otool_tab5_live2d.bin` 0x2e8eb0（81% 分区空闲）；
+- 提交：`09da62f`。
 
 剩余风险：
-- ...
-```
+
+- WP1 其余 P1（OpenAI 真机 smoke、host test clean clone 复现命令）待后续 WP；
+- 设备侧 NVS 凭证需首次通过 console 注入（`cred-set wifi_pass ...`、`cred-set llm_key ...`）。
