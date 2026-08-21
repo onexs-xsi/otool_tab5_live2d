@@ -157,11 +157,6 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "got ip: " IPSTR, IP2STR(&event->ip_info.ip));
         s_wifi_retries = 0;
-        /* 降低发射功率（10 dBm），减少 USB 供电下的电流尖峰（HP WDT 复位缓解） */
-        esp_err_t perr = esp_wifi_set_max_tx_power(40);
-        if (perr != ESP_OK) {
-            ESP_LOGW(TAG, "esp_wifi_set_max_tx_power: %s", esp_err_to_name(perr));
-        }
         xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);
     }
 }
