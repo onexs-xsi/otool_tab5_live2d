@@ -1018,3 +1018,26 @@ Gate 达成：Ark Chat 完成真实工具闭环（"用户问题 → 工具调用
 
 - OpenAI Responses 工具调用仍无凭证可测（记录为外部依赖）；
 - Ark Responses 工具闭环（WP6 已真机验证）与 Ark Chat 工具闭环（本轮）均已达成。
+
+### 2026-08-22 — WP7（完成：host 测试一键脚本）
+
+新增 `test_apps/run_host_tests.ps1`：一条命令编译并运行全部宿主测试。
+
+- 依赖：TinyCC（默认 `%TEMP%\tcc\tcc\tcc.exe`，`-TccPath` 可覆盖）；
+- 编译源：sse_parser、responses_sse、chat_completions_sse、protocol_resolve、providers（ark/openai/custom/table）、tool_registry、tool_schema、cJSON（host 专用）；
+- `host_tests`：1386 checks, 0 failures（SSE 分帧、Responses/Chat tool adapter、schema 校验）；
+- `agent_host_tests`：32 checks, 0 failures（Agent 状态机，stub request/timer）；
+- 任一失败返回非 0 退出码。
+
+运行方式（已验证）：
+
+```
+powershell -ExecutionPolicy Bypass -File components\otool_llm_sdk\test_apps\run_host_tests.ps1
+== running host_tests ==
+1386 checks, 0 failures
+== running agent_host_tests ==
+32 checks, 0 failures
+HOST TESTS: ALL PASS
+```
+
+Gate 达成：host 测试一条命令有文档、有稳定结果（IDF test app 命令由 `idf.py build` + 真机 console 冒烟承担，见 WP6/WP8 记录）。
