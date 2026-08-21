@@ -15,5 +15,8 @@
     "--query-driver=**",
     "--compile-commands-dir=d:\\work\\otool_tab5_live2d\\build"
   ],
-  "idf.flashType": "UART"
+  "idf.flashType": "UART",
+  "terminal.integrated.env.windows": {
+    "PYTHONUTF8": "1"
+  }
 }
