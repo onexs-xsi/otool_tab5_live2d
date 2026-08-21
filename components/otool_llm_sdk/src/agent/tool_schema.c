@@ -74,7 +74,7 @@ static bool validate_schema_node(cJSON *node, int depth)
         }
         cJSON *req = cJSON_GetObjectItemCaseSensitive(node, "required");
         if (req != NULL) {
-            if (!cJSON_IsArray(req) || cJSON_GetArraySize(req) == 0) {
+            if (!cJSON_IsArray(req)) {
                 return false;
             }
             int n = cJSON_GetArraySize(req);

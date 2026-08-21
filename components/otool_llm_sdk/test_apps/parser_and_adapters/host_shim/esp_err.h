@@ -28,4 +28,6 @@ typedef int esp_err_t;
 #define ESP_ERR_INVALID_RESPONSE 0x108
 #define ESP_ERR_INVALID_VERSION 0x10A
 
+const char *esp_err_to_name(esp_err_t code);
+
 #endif /* HOST_SHIM_ESP_ERR_H */

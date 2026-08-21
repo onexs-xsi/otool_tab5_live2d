@@ -1,5 +1,6 @@
 idf_component_register(
     SRCS
+        "src/agent/agent.c"
         "src/agent/tool_registry.c"
         "src/agent/tool_schema.c"
         "src/core/client.c"
@@ -18,5 +19,5 @@ idf_component_register(
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "private_include"
     REQUIRES esp_http_client
-    PRIV_REQUIRES esp-tls espressif__cjson
+    PRIV_REQUIRES esp-tls esp_timer espressif__cjson
 )
