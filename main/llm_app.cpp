@@ -277,20 +277,20 @@ static void llm_worker_task(void *arg)
     };
 
     for (int round = 0;; round++) {
-        /* 等待触发（点击屏幕）或 30s 自动进入下一轮 */
-        if (xSemaphoreTake(s_trigger_sem, pdMS_TO_TICKS(30000)) == pdTRUE) {
-            /* 点击触发：若正在请求，先跨任务打断（SDK 取消能力） */
-            if (xSemaphoreTake(s_request_lock, portMAX_DELAY) == pdTRUE) {
-                if (s_active_request != nullptr) {
-                    ESP_LOGI(TAG, "tap: cancelling in-flight request");
-                    otool_llm_request_cancel(s_active_request);
-                }
-                xSemaphoreGive(s_request_lock);
+        /* 事件驱动：等待触发（点击屏幕 / console llm-ask），不再自动轮询调试 */
+        xSemaphoreTake(s_trigger_sem, portMAX_DELAY);
+
+        /* 触发时若上一轮仍在请求，先跨任务打断（SDK 取消能力） */
+        if (xSemaphoreTake(s_request_lock, portMAX_DELAY) == pdTRUE) {
+            if (s_active_request != nullptr) {
+                ESP_LOGI(TAG, "trigger: cancelling in-flight request");
+                otool_llm_request_cancel(s_active_request);
             }
-            int waited = 0;
-            while (s_request_busy && waited++ < 300) {
-                vTaskDelay(pdMS_TO_TICKS(10));
-            }
+            xSemaphoreGive(s_request_lock);
+        }
+        int waited = 0;
+        while (s_request_busy && waited++ < 300) {
+            vTaskDelay(pdMS_TO_TICKS(10));
         }
 
         s_round = round;
@@ -313,8 +313,7 @@ static void llm_worker_task(void *arg)
             ESP_LOGE(TAG, "request create failed: %s", esp_err_to_name(err));
             reply_set_error("request create failed");
             s_request_busy = false;
-            vTaskDelay(pdMS_TO_TICKS(5000));
-            continue;
+            continue; /* 回到等待触发状态 */
         }
 
         /* 注册为可打断的当前请求 */
