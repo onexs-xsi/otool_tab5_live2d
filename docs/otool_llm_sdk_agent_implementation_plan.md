@@ -887,3 +887,44 @@ Gate：提交 ADR 和最小协议探针；未完成前不把语音代码混入 A
 
 - WP1 其余 P1（OpenAI 真机 smoke、host test clean clone 复现命令）待后续 WP；
 - 设备侧 NVS 凭证需首次通过 console 注入（`cred-set wifi_pass ...`、`cred-set llm_key ...`）。
+
+### 2026-08-22 — WP3（完成：工具 registry + 本地 schema 校验）
+
+改动：
+
+- `include/otool_llm_tools.h`：registry API（create/add/seal/destroy/find/count/at）+ `otool_llm_tool_arguments_validate()`；
+- 新增 `src/agent/tool_registry.c`：深拷贝、唯一性、名称安全字符校验（字母数字下划线，<64B）、schema 注册时校验、seal 后拒绝增删；
+- 新增 `src/agent/tool_schema.c`（+`private_include/otool_llm_tool_schema.h`）：JSON Schema 子集校验器（顶层 object、properties、required 名称必须已声明、additionalProperties:true 拒绝、属性类型 string/number/integer/boolean/null、enum；minLength/maxLength/minimum/maximum/pattern/items/anyOf/allOf/oneOf/not/format/$ref 出现即拒绝；深度 ≤3）；
+- 两层校验：注册时验 schema、调用前验 arguments 实例（缺 required/未知字段/类型错/enum 不匹配/非 object → `OTOOL_LLM_ERR_TOOL_ARGUMENTS`）。
+
+验证：
+
+- host 测试新增 3 组（registry 基本/非法 schema 矩阵/arguments 校验矩阵），`1362 checks, 0 failures`；
+- 固件 `idf.py build` → BUILD OK。
+
+剩余风险：
+
+- 数组/嵌套 object 属性暂不支持（注册即拒）；字符串长度/数值范围校验为 P1。
+
+### 2026-08-22 — WP4（完成：基础 Agent Runtime）
+
+改动：
+
+- 新增 `include/otool_llm_agent.h`（create/run_stream/cancel/reset_session/destroy；事件 RUN_STARTED/TURN_STARTED/TEXT_DELTA/TOOL_CALL_*/TOOL_EXECUTION_*/USAGE/TURN_COMPLETED/RUN_COMPLETED/RUN_LIMIT_REACHED/CANCELLED/ERROR）；
+- 新增 `src/agent/agent.c`：平台无关核心（仅依赖 SDK API + `esp_timer_get_time`）；
+  - Responses 远端 response chain：`store=true` + 每轮保存 response_id + 下轮 `previous_response_id` + `function_call_output`；
+  - 每轮工具数组取自 registry；bridge 事件把 SDK 文本事件转发为 agent 事件并收集 tool calls；
+  - 工具执行：policy 检查（副作用/需审批工具在无 policy 时默认拒绝）、schema 参数校验、合作式取消与 deadline、输出有界；
+  - 稳定错误封装 JSON：`unknown_tool`/`permission_denied`/`invalid_arguments`/`tool_failed`（`{"ok":false,"error":{...}}`）；
+  - 上限：max_turns（默认 6）/max_tool_calls（默认 8）/run_timeout（默认 120s）；取消贯穿 request 与工具执行；每次 run 恰好一个 terminal agent event；
+- host 测试新增 `test_apps/agent_host_tests.c`（fake provider 两轮脚本：模型要工具 → 执行 get_device_status → 结果回传 → 最终中文回答；断言链请求结构），`20 checks, 0 failures`。
+
+验证：
+
+- `host_tests` 1362 + `agent_host_tests` 20 全绿；固件 `idf.py build` → BUILD OK（0x2ea230）；
+- 提交：`434f059`。
+
+剩余风险：
+
+- 循环检测（同一 name+arguments 连续 2 次）与 Chat 工具调用（WP5）未实现；
+- OpenAI 真机工具闭环未测（无凭证）。
