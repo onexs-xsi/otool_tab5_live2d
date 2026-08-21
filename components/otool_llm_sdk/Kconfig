@@ -1,0 +1,16 @@
+menu "otool_llm_sdk"
+
+config OTOOL_LLM_ENDPOINT_URL
+    string "LLM streaming endpoint URL"
+    default "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+    help
+        OpenAI-compatible chat completions endpoint used for streaming.
+
+config OTOOL_LLM_RECV_TIMEOUT_MS
+    int "LLM HTTP receive timeout (ms)"
+    default 60000
+    range 1000 300000
+    help
+        Timeout for receiving streamed LLM chunks.
+
+endmenu
