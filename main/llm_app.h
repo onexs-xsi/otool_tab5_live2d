@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -7,15 +8,26 @@ extern "C" {
 #endif
 
 /**
- * @brief Start the LLM app: Doubao streaming chat + LVGL UI.
+ * @brief LLM worker snapshot (filled by llm_app_get_status).
+ */
+typedef struct {
+    int round;              /**< Last/current round index */
+    bool busy;              /**< A request is in flight */
+    size_t reply_len;       /**< Bytes accumulated in the reply buffer */
+    char error[128];        /**< Last error message ("" if none) */
+} llm_app_status_t;
+
+/**
+ * @brief Start the LLM worker (blocking requests on its own task).
  *
- * Wi-Fi is managed separately by wifi_app_start(); the LLM worker waits for
- * the connection before the first request.
+ * Does NOT create any UI; the UI is managed by ui_app_start(). The worker
+ * waits for Wi-Fi (wifi_app) before the first request and then only acts on
+ * triggers (tap / llm-ask console command).
  */
 void llm_app_start(void);
 
 /**
- * @brief Trigger a new LLM round immediately (console/touch entry).
+ * @brief Trigger a new LLM round immediately (tap / console entry).
  */
 void llm_app_ask_now(void);
 
@@ -25,9 +37,21 @@ void llm_app_ask_now(void);
 void llm_app_cancel_now(void);
 
 /**
- * @brief Fill a short human-readable status string.
+ * @brief Fill a status snapshot (thread-safe).
  */
-void llm_app_status_str(char *buf, size_t size);
+void llm_app_get_status(llm_app_status_t *out);
+
+/**
+ * @brief Copy the accumulated reply text out of the worker's buffer.
+ *
+ * @return Number of bytes copied (excluding NUL).
+ */
+size_t llm_app_reply_read(char *buf, size_t cap);
+
+/**
+ * @brief Copy the transient hint text (console feedback) out.
+ */
+void llm_app_hint_read(char *buf, size_t cap);
 
 /**
  * @brief Set a transient status hint (console feedback).

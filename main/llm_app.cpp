@@ -1,15 +1,13 @@
-// otool_tab5_live2d LLM app: Doubao streaming chat + LVGL UI.
-// Wi-Fi 由独立模块 wifi_app 管理（见 wifi_app.h）。
+// otool_tab5_live2d LLM module: Doubao streaming chat worker + shared reply buffer.
+// 不含任何 LVGL/UI 代码（界面由 ui_app 模块负责）。
 // 线程模型：LLM worker task 阻塞执行 SDK 请求；回调只拷贝 delta 到共享 buffer；
-// LVGL timer（LVGL 上下文）把 buffer 同步到界面，不阻塞 UI。
+// UI 通过 llm_app_reply_read()/llm_app_get_status() 读取。
 
 #include "llm_app.h"
 #include "wifi_app.h"
 
 #include "otool_llm_sdk.h"
 #include "otool_llm_text.h"
-#include "otool_lvgl_port.h"
-#include "lvgl.h"
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -22,13 +20,13 @@
 
 static const char *TAG = "llm_app";
 
-/* 触摸触发与打断 */
-static SemaphoreHandle_t s_trigger_sem = nullptr;   /* 点击屏幕 → 立即提问/打断 */
+/* 触摸/命令触发与打断 */
+static SemaphoreHandle_t s_trigger_sem = nullptr;   /* 触发 → 立即提问/打断 */
 static SemaphoreHandle_t s_request_lock = nullptr;  /* 保护 s_active_request */
 static otool_llm_request_handle_t s_active_request = nullptr;
 static volatile int s_round = 0;
 
-/* ---------------- 共享回复 buffer（worker 写，LVGL timer 读） ---------------- */
+/* ---------------- 共享回复 buffer（worker 写，UI/console 读） ---------------- */
 
 static constexpr size_t REPLY_BUF_CAP = 4096;
 
@@ -77,15 +75,7 @@ static void reply_set_error(const char *message)
     }
 }
 
-static void reply_clear_error(void)
-{
-    if (xSemaphoreTake(s_reply_lock, portMAX_DELAY) == pdTRUE) {
-        s_last_error[0] = '\0';
-        xSemaphoreGive(s_reply_lock);
-    }
-}
-
-/* ---------------- console / UI 控制入口 ---------------- */
+/* ---------------- 对外数据接口（线程安全） ---------------- */
 
 extern "C" void llm_app_ask_now(void)
 {
@@ -104,15 +94,50 @@ extern "C" void llm_app_cancel_now(void)
     }
 }
 
-extern "C" void llm_app_status_str(char *buf, size_t size)
+extern "C" void llm_app_get_status(llm_app_status_t *out)
 {
+    if (out == nullptr) {
+        return;
+    }
     if (xSemaphoreTake(s_reply_lock, portMAX_DELAY) == pdTRUE) {
-        snprintf(buf, size, "round=%d busy=%d reply_len=%u err=%s", s_round,
-                 (int)s_request_busy, (unsigned)s_reply_len,
-                 s_last_error[0] ? s_last_error : "-");
+        out->round = s_round;
+        out->busy = s_request_busy;
+        out->reply_len = s_reply_len;
+        snprintf(out->error, sizeof(out->error), "%s", s_last_error);
         xSemaphoreGive(s_reply_lock);
     } else {
-        snprintf(buf, size, "status unavailable");
+        memset(out, 0, sizeof(*out));
+    }
+}
+
+extern "C" size_t llm_app_reply_read(char *buf, size_t cap)
+{
+    if (buf == nullptr || cap == 0) {
+        return 0;
+    }
+    size_t copied = 0;
+    if (xSemaphoreTake(s_reply_lock, portMAX_DELAY) == pdTRUE) {
+        size_t n = s_reply_len < cap - 1 ? s_reply_len : cap - 1;
+        memcpy(buf, s_reply_buf, n);
+        buf[n] = '\0';
+        copied = n;
+        xSemaphoreGive(s_reply_lock);
+    } else {
+        buf[0] = '\0';
+    }
+    return copied;
+}
+
+extern "C" void llm_app_hint_read(char *buf, size_t cap)
+{
+    if (buf == nullptr || cap == 0) {
+        return;
+    }
+    if (xSemaphoreTake(s_reply_lock, portMAX_DELAY) == pdTRUE) {
+        snprintf(buf, cap, "%s", s_hint);
+        xSemaphoreGive(s_reply_lock);
+    } else {
+        buf[0] = '\0';
     }
 }
 
@@ -259,86 +284,6 @@ static void llm_worker_task(void *arg)
     }
 }
 
-/* ---------------- UI ---------------- */
-
-static lv_obj_t *s_status_label = nullptr;
-static lv_obj_t *s_reply_label = nullptr;
-static lv_obj_t *s_hint_label = nullptr;
-static char s_status_text[192] = "starting...";
-
-/* 点击屏幕：触发提问 / 打断当前请求 */
-static void screen_click_cb(lv_event_t *e)
-{
-    (void)e;
-    ESP_LOGI(TAG, "tap detected");
-    xSemaphoreGive(s_trigger_sem);
-}
-
-static void ui_timer_cb(lv_timer_t *timer)
-{
-    (void)timer;
-    if (s_reply_label == nullptr) {
-        return;
-    }
-
-    if (xSemaphoreTake(s_reply_lock, portMAX_DELAY) == pdTRUE) {
-        if (s_last_error[0] != '\0') {
-            snprintf(s_status_text, sizeof(s_status_text), "round %d | error: %.120s", s_round,
-                     s_last_error);
-        } else if (s_request_busy) {
-            snprintf(s_status_text, sizeof(s_status_text), "round %d | LLM streaming...", s_round);
-        } else {
-            snprintf(s_status_text, sizeof(s_status_text), "round %d | LLM idle | tap to ask",
-                     s_round);
-        }
-        if (s_hint[0] != '\0') {
-            lv_label_set_text(s_hint_label, s_hint);
-        }
-        lv_label_set_text(s_status_label, s_status_text);
-        lv_label_set_text(s_reply_label, s_reply_buf);
-        xSemaphoreGive(s_reply_lock);
-    }
-}
-
-static void ui_build(void)
-{
-    otool_lvgl_port_lock(0);
-
-    lv_obj_t *scr = lv_scr_act();
-    lv_obj_set_style_bg_color(scr, lv_color_hex(0x1a1a2e), 0);
-    lv_obj_set_style_pad_all(scr, 16, 0);
-
-    /* 状态行 */
-    s_status_label = lv_label_create(scr);
-    lv_label_set_text(s_status_label, "starting...");
-    lv_obj_set_style_text_color(s_status_label, lv_color_hex(0x8fa3c0), 0);
-    lv_obj_align(s_status_label, LV_ALIGN_TOP_LEFT, 0, 0);
-
-    /* 触摸提示行 */
-    s_hint_label = lv_label_create(scr);
-    lv_label_set_text(s_hint_label, "tap screen to ask / interrupt");
-    lv_obj_set_style_text_color(s_hint_label, lv_color_hex(0x55607a), 0);
-    lv_obj_align(s_hint_label, LV_ALIGN_TOP_RIGHT, 0, 0);
-
-    /* 回复区 */
-    s_reply_label = lv_label_create(scr);
-    lv_label_set_text(s_reply_label, "");
-    lv_label_set_long_mode(s_reply_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s_reply_label, lv_pct(100));
-    lv_obj_set_style_text_color(s_reply_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(s_reply_label, &lv_font_source_han_sans_sc_16_cjk, 0);
-    lv_obj_align(s_reply_label, LV_ALIGN_TOP_LEFT, 0, 40);
-    lv_obj_set_height(s_reply_label, lv_pct(80));
-    lv_obj_set_style_text_line_space(s_reply_label, 6, 0);
-
-    /* 全屏触摸：点击提问 / 打断 */
-    lv_obj_add_event_cb(scr, screen_click_cb, LV_EVENT_CLICKED, nullptr);
-
-    otool_lvgl_port_unlock();
-
-    lv_timer_create(ui_timer_cb, CONFIG_OTOOL_LLM_UI_REFRESH_MS, nullptr);
-}
-
 /* ---------------- entry ---------------- */
 
 extern "C" void llm_app_start(void)
@@ -346,8 +291,6 @@ extern "C" void llm_app_start(void)
     s_reply_lock = xSemaphoreCreateMutex();
     s_request_lock = xSemaphoreCreateMutex();
     s_trigger_sem = xSemaphoreCreateCounting(4, 0);
-
-    ui_build();
 
     BaseType_t created = xTaskCreatePinnedToCore(llm_worker_task, "llm_worker",
                                                  CONFIG_OTOOL_LLM_LLM_TASK_STACK_SIZE, nullptr, 5,

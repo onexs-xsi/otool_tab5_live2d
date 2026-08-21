@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "main.cpp" "llm_app.cpp" "wifi_app.cpp" "console_cmds.cpp"
+    SRCS "main.cpp" "llm_app.cpp" "wifi_app.cpp" "ui_app.cpp" "console_cmds.cpp"
     INCLUDE_DIRS "."
     REQUIRES
         otool_dev_autodetect

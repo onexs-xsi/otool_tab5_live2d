@@ -75,9 +75,10 @@ static int do_llm_status(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
-    char buf[192];
-    llm_app_status_str(buf, sizeof(buf));
-    printf("llm: %s\n", buf);
+    llm_app_status_t st;
+    llm_app_get_status(&st);
+    printf("llm: round=%d busy=%d reply_len=%u err=%s\n", st.round, (int)st.busy,
+           (unsigned)st.reply_len, st.error[0] ? st.error : "-");
     return 0;
 }
 

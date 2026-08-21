@@ -13,6 +13,7 @@
 
 #include "llm_app.h"
 #include "wifi_app.h"
+#include "ui_app.h"
 #include "console_cmds.h"
 
 static const char *TAG = "main";
@@ -73,8 +74,11 @@ extern "C" void app_main(void)
     // 联网（C6 Wi-Fi，独立模块 wifi_app）
     ESP_ERROR_CHECK(wifi_app_start(&g_comp));
 
-    // LLM 对话 + UI
+    // LLM 对话 worker（独立模块 llm_app）
     llm_app_start();
+
+    // LLM 状态界面（独立模块 ui_app）
+    ui_app_start();
 
     // USB-Serial-JTAG 命令行（help / wifi / llm / free / version）
     console_start();
