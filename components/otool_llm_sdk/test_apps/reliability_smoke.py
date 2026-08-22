@@ -32,7 +32,7 @@ import serial
 RE_RUN_START = re.compile(r"\[agent\] ===== run (\d+):")
 RE_RUN_DONE = re.compile(r"\[agent\] run (\d+) done: (\S+)")
 RE_CANCELLED = re.compile(r"\[agent\] CANCELLED")
-RE_ERROR = re.compile(r"\[agent\] ERROR code=0x([0-9a-fA-F]+)")
+RE_ERROR = re.compile(r"\[agent\] ERROR (.*)")
 RE_TOOL_CALL = re.compile(r"\[agent\] TOOL_CALL_STARTED")
 RE_TOOL_EXEC = re.compile(r"\[agent\] TOOL_EXECUTION_STARTED")
 RE_TEXT_DELTA = re.compile(r"\[agent\] TEXT_DELTA")
@@ -216,8 +216,8 @@ def phase_a(dev, stats, n, report):
             continue
         if err_match:
             stats.runs_err += 1
-            stats.errors.append(f"run {i}: {err_match.group(0)}")
-            report.append(f"  run {i}: ERROR {err_match.group(0)} ({dt_ms:.0f}ms)")
+            stats.errors.append(f"run {i}: {err_match.group(1)}")
+            report.append(f"  run {i}: ERROR {err_match.group(1)} ({dt_ms:.0f}ms)")
             continue
         if done.group(2) != "ESP_OK":
             stats.runs_err += 1

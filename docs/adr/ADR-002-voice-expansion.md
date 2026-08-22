@@ -44,6 +44,19 @@ ASR → 文本 Agent（现有 `otool_llm_text.h` + agent runtime，零改动）�
 3. 语音 API 凭证与文本 API 分开管理（NVS `otool_cred` 增加
    `asr_key`/`tts_key` 或复用 `llm_key` 的评估结论待探针确定）。
 
+## 事实核查（2026-08-22）
+
+- 火山方舟已提供 **Realtime API 调用 Doubao**（官方文档：
+  [使用 Realtime API 调用 Doubao](https://www.volcengine.com/docs/6893/1527770?lang=zh)、
+  [建连参数](https://docs.volcengine.com/docs/6893/1527759?lang=zh)），
+  全双工 WSS 方案在方舟上可行；
+- 社区有豆包 s2s（speech-to-speech）示例仓库（如
+  [doubao-s2s-example](https://github.com/openqht/doubao-s2s-example)）可参考
+  协议细节，但本项目不复制其代码；
+- 探针需确认：Realtime 模型 ID（预置模型列表）、WSS 端点与鉴权方式
+  （API Key 直连或临时 token）、音频格式（采样率/编码）、事件 schema
+  （session.update / conversation.item / response.create 等 OpenAI 兼容性）。
+
 ## 验收
 
 - [ ] 最小 WSS 探针（Python）：连接、鉴权、文本/事件往返、断线重连语义

@@ -262,6 +262,17 @@ esp_err_t otool_llm_transport_execute(const otool_llm_transport_config_t *cfg)
                 /* Stream ended with a half event: protocol EOF, never a success. */
                 err = OTOOL_LLM_ERR_PROTOCOL_EOF;
             }
+        } else {
+            /* perform 失败：esp_http_client 对 401 会自动走 HTTP 认证路径
+             * （esp_http_client_add_auth），无认证配置时返回 ESP_ERR_NOT_SUPPORTED，
+             * 且不会触发 ON_DATA——上面的 status 检查被绕过。这里按已收到的
+             * 响应状态码归类为 HTTP 错误，保证 401/5xx 语义正确。 */
+            int status = esp_http_client_get_status_code(client);
+            if (status >= 400) {
+                ESP_LOGD(TAG, "perform failed with HTTP status %d (err=%s)", status,
+                         esp_err_to_name(err));
+                err = OTOOL_LLM_ERR_HTTP_STATUS;
+            }
         }
     } else {
         err = ESP_ERR_INVALID_STATE;

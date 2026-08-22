@@ -417,8 +417,10 @@ void app_main(void)
              OTOOL_LLM_TEXT_EVENT_COMPLETED, ESP_OK, 2, "Hi from chat", 10);
 
     /* error shapes */
+    /* 401：esp_http_client 自动走认证路径失败（不触发 ON_DATA），transport 按
+     * 状态码归类为 HTTP_STATUS；429/500 有 body（触发 ON_DATA）→ PROVIDER。 */
     run_case("err-401", "/401", OTOOL_LLM_PROTOCOL_RESPONSES_SSE,
-             OTOOL_LLM_TEXT_EVENT_ERROR, OTOOL_LLM_ERR_PROVIDER, -1, NULL, 0);
+             OTOOL_LLM_TEXT_EVENT_ERROR, OTOOL_LLM_ERR_HTTP_STATUS, -1, NULL, 0);
     run_case("err-429", "/429", OTOOL_LLM_PROTOCOL_RESPONSES_SSE,
              OTOOL_LLM_TEXT_EVENT_ERROR, OTOOL_LLM_ERR_PROVIDER, -1, NULL, 0);
     run_case("err-500", "/500", OTOOL_LLM_PROTOCOL_RESPONSES_SSE,

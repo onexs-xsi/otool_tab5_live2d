@@ -170,7 +170,8 @@ static otool_llm_event_action_t agent_on_event(const otool_llm_agent_event_t *ev
                (long long)evt->data.usage.output_tokens);
         break;
     case OTOOL_LLM_AGENT_EVENT_ERROR:
-        printf(" code=0x%x", (unsigned)evt->data.error.code);
+        printf(" code=0x%x msg=%.100s", (unsigned)evt->data.error.code,
+               evt->data.error.message != nullptr ? evt->data.error.message : "");
         set_error(evt->data.error.message);
         break;
     case OTOOL_LLM_AGENT_EVENT_RUN_LIMIT_REACHED:

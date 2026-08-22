@@ -67,6 +67,7 @@ Run-One "agent_host_tests" @(
     (Join-Path $Comp "src\agent\agent.c"),
     (Join-Path $Comp "src\agent\tool_registry.c"),
     (Join-Path $Comp "src\agent\tool_schema.c"),
+    (Join-Path $Comp "src\core\error.c"),
     (Join-Path $CJson "cJSON.c")
 ) (Join-Path $PSScriptRoot "agent_host_tests.c")
 

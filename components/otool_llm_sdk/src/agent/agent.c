@@ -427,7 +427,7 @@ esp_err_t otool_llm_agent_run_stream(otool_llm_agent_handle_t agent,
         if (err != ESP_OK) {
             evt.type = OTOOL_LLM_AGENT_EVENT_ERROR;
             evt.data.error.code = err;
-            evt.data.error.message = esp_err_to_name(err);
+            evt.data.error.message = otool_llm_err_to_name(err);
             agent_emit(agent, &evt);
             result = err;
             break;
@@ -449,7 +449,7 @@ esp_err_t otool_llm_agent_run_stream(otool_llm_agent_handle_t agent,
         if (err != ESP_OK && !bridge.turn_ok) {
             evt.type = OTOOL_LLM_AGENT_EVENT_ERROR;
             evt.data.error.code = err != ESP_OK ? err : OTOOL_LLM_ERR_PROTOCOL;
-            evt.data.error.message = esp_err_to_name(err);
+            evt.data.error.message = otool_llm_err_to_name(err);
             agent_emit(agent, &evt);
             result = err;
             break;
