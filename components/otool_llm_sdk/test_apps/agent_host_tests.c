@@ -69,6 +69,7 @@ static const otool_llm_text_request_t *g_last_request = NULL; /* 最近一次 cr
 static int g_fake_chat = 0;              /* 非 0：Chat 事件脚本（delta.tool_calls） */
 static const char *g_fake_tool_name = "get_device_status"; /* 模型请求的工具名 */
 static int g_fake_loop = 0;              /* 非 0：turn 2+ 也返回同一工具调用（循环） */
+static int g_fake_multi = 0;             /* 非 0：turn1 发两个工具调用（不同参数） */
 
 esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
                                    const otool_llm_text_request_t *request,
@@ -189,6 +190,33 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
 
         evt.type = OTOOL_LLM_TEXT_EVENT_COMPLETED;
         cb(&evt, user_ctx);
+        if (g_fake_multi) {
+            /* 第二个工具调用（同工具、不同参数；output_index=1） */
+            evt.type = OTOOL_LLM_TEXT_EVENT_RESPONSE_STARTED;
+            evt.response_id = "resp_1b";
+            cb(&evt, user_ctx);
+
+            evt.type = OTOOL_LLM_TEXT_EVENT_TOOL_CALL_STARTED;
+            evt.data.tool_call_started.output_index = 1;
+            evt.data.tool_call_started.call_id = "call_2";
+            evt.data.tool_call_started.name = g_fake_tool_name;
+            cb(&evt, user_ctx);
+
+            evt.type = OTOOL_LLM_TEXT_EVENT_TOOL_ARGUMENTS_DELTA;
+            evt.data.tool_arguments_delta.delta = "{\"x\":1}";
+            evt.data.tool_arguments_delta.delta_len = 7;
+            cb(&evt, user_ctx);
+
+            evt.type = OTOOL_LLM_TEXT_EVENT_TOOL_CALL_DONE;
+            evt.data.tool_call_done.call_id = "call_2";
+            evt.data.tool_call_done.name = g_fake_tool_name;
+            evt.data.tool_call_done.arguments = "{\"x\":1}";
+            evt.data.tool_call_done.arguments_len = 7;
+            cb(&evt, user_ctx);
+
+            evt.type = OTOOL_LLM_TEXT_EVENT_COMPLETED;
+            cb(&evt, user_ctx);
+        }
         return ESP_OK;
     }
 
@@ -600,6 +628,198 @@ static void test_agent_callback_cancel(void)
     otool_llm_tool_registry_destroy(reg);
 }
 
+static esp_err_t tool_always_fail(const char *arguments_json, char *output_json,
+                                  size_t output_capacity, size_t *output_length,
+                                  const otool_llm_tool_exec_context_t *exec_ctx, void *user_ctx)
+{
+    (void)arguments_json;
+    (void)exec_ctx;
+    (void)user_ctx;
+    snprintf(output_json, output_capacity, "{\"ok\":false,\"error\":{\"code\":\"boom\"}}");
+    *output_length = strlen(output_json);
+    return ESP_FAIL;
+}
+
+static esp_err_t tool_empty_result(const char *arguments_json, char *output_json,
+                                   size_t output_capacity, size_t *output_length,
+                                   const otool_llm_tool_exec_context_t *exec_ctx, void *user_ctx)
+{
+    (void)arguments_json;
+    (void)exec_ctx;
+    (void)user_ctx;
+    snprintf(output_json, output_capacity, "{}");
+    *output_length = strlen(output_json);
+    return ESP_OK;
+}
+
+static void test_agent_tool_failures(void)
+{
+    /* unknown tool / 业务失败 / 空结果：都产生 FAILED 事件（或空 FINISHED），
+     * run 不终止，模型在下一轮拿到结果继续回答。 */
+    otool_llm_tool_registry_handle_t reg = NULL;
+    CHECK(otool_llm_tool_registry_create(&reg) == ESP_OK, "fail reg create");
+    otool_llm_tool_definition_t tool = {};
+    tool.struct_size = sizeof(tool);
+    tool.name = "get_device_status";
+    tool.description = "status";
+    tool.parameters_json_schema =
+        "{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}";
+    tool.flags = OTOOL_LLM_TOOL_READ_ONLY;
+    tool.execute = tool_get_device_status;
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == ESP_OK, "fail add ok tool");
+
+    otool_llm_tool_definition_t ftool = {};
+    ftool.struct_size = sizeof(ftool);
+    ftool.name = "always_fail";
+    ftool.description = "always fails";
+    ftool.parameters_json_schema =
+        "{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}";
+    ftool.flags = OTOOL_LLM_TOOL_READ_ONLY;
+    ftool.execute = tool_always_fail;
+    CHECK(otool_llm_tool_registry_add(reg, &ftool) == ESP_OK, "fail add fail tool");
+
+    otool_llm_tool_definition_t etool = {};
+    etool.struct_size = sizeof(etool);
+    etool.name = "empty_tool";
+    etool.description = "empty result";
+    etool.parameters_json_schema =
+        "{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}";
+    etool.flags = OTOOL_LLM_TOOL_READ_ONLY;
+    etool.execute = tool_empty_result;
+    CHECK(otool_llm_tool_registry_add(reg, &etool) == ESP_OK, "fail add empty tool");
+    otool_llm_tool_registry_seal(reg);
+
+    otool_llm_agent_config_t cfg = {};
+    cfg.struct_size = sizeof(cfg);
+    cfg.client = (otool_llm_client_handle_t)0x2;
+    cfg.tools = reg;
+    cfg.model = "fake-model";
+    cfg.max_turns = 4;
+    cfg.max_tool_calls = 4;
+
+    /* case 1: unknown tool（未注册）→ FAILED(unknown_tool)，run 继续到 RUN_COMPLETED */
+    otool_llm_agent_handle_t agent = NULL;
+    CHECK(otool_llm_agent_create(&cfg, &agent) == ESP_OK, "fail agent create");
+    agent_collector_t col = { 0 };
+    g_fake_turn = 0;
+    g_fake_tool_name = "no_such_tool";
+    esp_err_t err = otool_llm_agent_run_stream(agent, "x", agent_collect_cb, &col);
+    CHECK(err == ESP_OK, "unknown tool run ok (0x%x)", (unsigned)err);
+    CHECK(col.events[col.count - 1].type == OTOOL_LLM_AGENT_EVENT_RUN_COMPLETED,
+          "unknown tool still completes (got %d)", (int)col.events[col.count - 1].type);
+    bool saw_unknown = false;
+    for (int i = 0; i < col.count; i++) {
+        if (col.events[i].type == OTOOL_LLM_AGENT_EVENT_TOOL_EXECUTION_FAILED) {
+            CHECK(strstr(col.events[i].data.tool_execution_finished.output, "unknown_tool") != NULL,
+                  "unknown_tool reason");
+            saw_unknown = true;
+        }
+    }
+    CHECK(saw_unknown, "unknown tool FAILED event");
+    otool_llm_agent_destroy(agent);
+
+    /* case 2: 工具返回业务失败 → FAILED(tool_failed)，run 继续 */
+    CHECK(otool_llm_agent_create(&cfg, &agent) == ESP_OK, "fail agent create 2");
+    col = (agent_collector_t){ 0 };
+    g_fake_turn = 0;
+    g_fake_tool_name = "always_fail";
+    err = otool_llm_agent_run_stream(agent, "x", agent_collect_cb, &col);
+    CHECK(err == ESP_OK, "fail tool run ok (0x%x)", (unsigned)err);
+    CHECK(col.events[col.count - 1].type == OTOOL_LLM_AGENT_EVENT_RUN_COMPLETED,
+          "fail tool still completes (got %d)", (int)col.events[col.count - 1].type);
+    bool saw_failed = false;
+    for (int i = 0; i < col.count; i++) {
+        if (col.events[i].type == OTOOL_LLM_AGENT_EVENT_TOOL_EXECUTION_FAILED) {
+            CHECK(strstr(col.events[i].data.tool_execution_finished.output, "tool_failed") != NULL,
+                  "tool_failed reason");
+            saw_failed = true;
+        }
+    }
+    CHECK(saw_failed, "fail tool FAILED event");
+    otool_llm_agent_destroy(agent);
+
+    /* case 3: 空结果 → FINISHED（空 JSON），run 继续 */
+    CHECK(otool_llm_agent_create(&cfg, &agent) == ESP_OK, "fail agent create 3");
+    col = (agent_collector_t){ 0 };
+    g_fake_turn = 0;
+    g_fake_tool_name = "empty_tool";
+    err = otool_llm_agent_run_stream(agent, "x", agent_collect_cb, &col);
+    CHECK(err == ESP_OK, "empty tool run ok (0x%x)", (unsigned)err);
+    CHECK(col.events[col.count - 1].type == OTOOL_LLM_AGENT_EVENT_RUN_COMPLETED,
+          "empty tool still completes (got %d)", (int)col.events[col.count - 1].type);
+    bool saw_finished = false;
+    for (int i = 0; i < col.count; i++) {
+        if (col.events[i].type == OTOOL_LLM_AGENT_EVENT_TOOL_EXECUTION_FINISHED) {
+            saw_finished = true;
+        }
+    }
+    CHECK(saw_finished, "empty tool FINISHED event");
+    otool_llm_agent_destroy(agent);
+
+    otool_llm_tool_registry_destroy(reg);
+    g_fake_tool_name = "get_device_status";
+}
+
+static void test_agent_multi_tools(void)
+{
+    /* 一轮两个工具调用（不同参数）→ 都执行，turn2 回传两个 tool_outputs */
+    otool_llm_tool_registry_handle_t reg = NULL;
+    CHECK(otool_llm_tool_registry_create(&reg) == ESP_OK, "multi reg create");
+    otool_llm_tool_definition_t tool = {};
+    tool.struct_size = sizeof(tool);
+    tool.name = "get_device_status";
+    tool.description = "status";
+    tool.parameters_json_schema =
+        "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"}},"
+        "\"required\":[],\"additionalProperties\":false}";
+    tool.flags = OTOOL_LLM_TOOL_READ_ONLY;
+    tool.execute = tool_get_device_status;
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == ESP_OK, "multi add tool");
+    otool_llm_tool_registry_seal(reg);
+
+    otool_llm_agent_config_t cfg = {};
+    cfg.struct_size = sizeof(cfg);
+    cfg.client = (otool_llm_client_handle_t)0x2;
+    cfg.tools = reg;
+    cfg.model = "fake-model";
+    cfg.max_turns = 4;
+    cfg.max_tool_calls = 4;
+
+    otool_llm_agent_handle_t agent = NULL;
+    CHECK(otool_llm_agent_create(&cfg, &agent) == ESP_OK, "multi agent create");
+
+    agent_collector_t col = { 0 };
+    g_fake_turn = 0;
+    g_fake_multi = 1;
+    g_last_request = NULL;
+    esp_err_t err = otool_llm_agent_run_stream(agent, "状态？", agent_collect_cb, &col);
+    g_fake_multi = 0;
+    CHECK(err == ESP_OK, "multi run ok (0x%x)", (unsigned)err);
+    CHECK(col.events[col.count - 1].type == OTOOL_LLM_AGENT_EVENT_RUN_COMPLETED,
+          "multi RUN_COMPLETED (got %d)", (int)col.events[col.count - 1].type);
+
+    int exec_finished = 0;
+    for (int i = 0; i < col.count; i++) {
+        if (col.events[i].type == OTOOL_LLM_AGENT_EVENT_TOOL_EXECUTION_FINISHED) {
+            exec_finished++;
+        }
+    }
+    CHECK_EQ_T(exec_finished, 2);
+
+    CHECK(g_last_request != NULL, "multi last request captured");
+    if (g_last_request != NULL) {
+        CHECK(g_last_request->tool_output_count == 2, "two tool outputs (got %u)",
+              (unsigned)g_last_request->tool_output_count);
+        if (g_last_request->tool_output_count == 2) {
+            CHECK_STR(g_last_request->tool_outputs[0].call_id, "call_1");
+            CHECK_STR(g_last_request->tool_outputs[1].call_id, "call_2");
+        }
+    }
+
+    otool_llm_agent_destroy(agent);
+    otool_llm_tool_registry_destroy(reg);
+}
+
 static void test_agent_chat_local_transcript(void)
 {
     /* LOCAL_TRANSCRIPT + Chat 事件脚本：工具结果通过 transcript 消息回传 */
@@ -675,6 +895,8 @@ int main(void)
     test_agent_policy();
     test_agent_loop_detection();
     test_agent_callback_cancel();
+    test_agent_tool_failures();
+    test_agent_multi_tools();
     test_agent_chat_local_transcript();
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
