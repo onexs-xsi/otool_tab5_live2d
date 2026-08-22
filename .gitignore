@@ -66,7 +66,7 @@ env/
 .ccls-cache/
 compile_commands.json
 
-# Third-party SDKs (Live2D Cubism SDK — licensed binaries, not for the repo)
+# Third-party SDKs (Live2D Cubism SDK 鈥?licensed binaries, not for the repo)
 third_party/
 
 # Windows specific
@@ -83,4 +83,4 @@ Desktop.ini
 # MSVC objects
 *.obj
 
-test_apps/transport_test/run_result.txt
+*transport_test/run_result.txt
