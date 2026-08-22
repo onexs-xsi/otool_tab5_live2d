@@ -105,6 +105,10 @@ struct otool_llm_agent {
     bool chat_mode;
     agent_transcript_entry_t transcript[AGENT_TRANSCRIPT_MAX];
     size_t transcript_count;
+    /* 循环检测：同一 name+arguments 连续 2 次 → RUN_LIMIT_REACHED（WP4 计划） */
+    char last_tool_name[64];
+    char last_tool_args[256];
+    bool have_last_tool;
 };
 
 /* ---------------- 事件发射 ---------------- */
@@ -271,6 +275,8 @@ static esp_err_t agent_execute_tool(otool_llm_agent_handle_t agent,
                                     const char *arguments, size_t arguments_len,
                                     char *output, size_t output_cap, size_t *output_len)
 {
+    /* 授权检查在 run_stream 工具循环中完成（policy/SIDE_EFFECTING/NEEDS_APPROVAL）；
+     * 这里只执行。 */
     if (tool->execute == NULL) {
         tool_error_output("tool_failed", "tool has no executor", false, output, output_cap);
         *output_len = strlen(output);
@@ -316,6 +322,7 @@ esp_err_t otool_llm_agent_run_stream(otool_llm_agent_handle_t agent,
     agent->turn_index = 0;
     agent->last_output_count = 0;
     agent->transcript_count = 0; /* 每次 run 独立 transcript */
+    agent->have_last_tool = false; /* 循环检测随 run 重置 */
 
     otool_llm_agent_event_t evt = { .type = OTOOL_LLM_AGENT_EVENT_RUN_STARTED };
     agent_emit(agent, &evt);
@@ -519,6 +526,18 @@ esp_err_t otool_llm_agent_run_stream(otool_llm_agent_handle_t agent,
                 finished = true;
                 break;
             }
+            /* 循环检测：与上一轮同一工具同一参数 → 模型在重复调用，停止（WP4） */
+            if (agent->have_last_tool && strcmp(agent->last_tool_name, c->name) == 0 &&
+                strcmp(agent->last_tool_args, c->arguments) == 0) {
+                ESP_LOGW(TAG, "tool loop detected (%s), stopping run", c->name);
+                evt.type = OTOOL_LLM_AGENT_EVENT_RUN_LIMIT_REACHED;
+                agent_emit(agent, &evt);
+                finished = true;
+                break;
+            }
+            snprintf(agent->last_tool_name, sizeof(agent->last_tool_name), "%s", c->name);
+            snprintf(agent->last_tool_args, sizeof(agent->last_tool_args), "%.255s", c->arguments);
+            agent->have_last_tool = true;
             total_tool_calls++;
             agent->tool_calls_done = total_tool_calls;
 

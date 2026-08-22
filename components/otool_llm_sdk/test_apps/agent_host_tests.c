@@ -67,6 +67,8 @@ const char *esp_err_to_name(esp_err_t code)
 static int g_fake_turn = 0;              /* 1-based model turn */
 static const otool_llm_text_request_t *g_last_request = NULL; /* 最近一次 create 的请求 */
 static int g_fake_chat = 0;              /* 非 0：Chat 事件脚本（delta.tool_calls） */
+static const char *g_fake_tool_name = "get_device_status"; /* 模型请求的工具名 */
+static int g_fake_loop = 0;              /* 非 0：turn 2+ 也返回同一工具调用（循环） */
 
 esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
                                    const otool_llm_text_request_t *request,
@@ -128,7 +130,7 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
 
             evt.type = OTOOL_LLM_TEXT_EVENT_TOOL_CALL_STARTED;
             evt.data.tool_call_started.call_id = "call_chat";
-            evt.data.tool_call_started.name = "get_device_status";
+            evt.data.tool_call_started.name = g_fake_tool_name;
             cb(&evt, user_ctx);
 
             evt.type = OTOOL_LLM_TEXT_EVENT_TOOL_ARGUMENTS_DELTA;
@@ -138,7 +140,7 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
 
             evt.type = OTOOL_LLM_TEXT_EVENT_TOOL_CALL_DONE;
             evt.data.tool_call_done.call_id = "call_chat";
-            evt.data.tool_call_done.name = "get_device_status";
+            evt.data.tool_call_done.name = g_fake_tool_name;
             evt.data.tool_call_done.arguments = "{}";
             evt.data.tool_call_done.arguments_len = 2;
             cb(&evt, user_ctx);
@@ -160,8 +162,8 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
         return ESP_OK;
     }
 
-    if (g_fake_turn == 1) {
-        /* turn 1: 模型要调用 get_device_status */
+    if (g_fake_turn == 1 || g_fake_loop) {
+        /* turn 1: 模型要调用 get_device_status（loop 模式：每轮都调用同一工具） */
         otool_llm_text_event_t evt = {};
         evt.type = OTOOL_LLM_TEXT_EVENT_RESPONSE_STARTED;
         evt.response_id = "resp_1";
@@ -170,7 +172,7 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
         evt.type = OTOOL_LLM_TEXT_EVENT_TOOL_CALL_STARTED;
         evt.data.tool_call_started.output_index = 0;
         evt.data.tool_call_started.call_id = "call_1";
-        evt.data.tool_call_started.name = "get_device_status";
+        evt.data.tool_call_started.name = g_fake_tool_name;
         cb(&evt, user_ctx);
 
         evt.type = OTOOL_LLM_TEXT_EVENT_TOOL_ARGUMENTS_DELTA;
@@ -180,7 +182,7 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
 
         evt.type = OTOOL_LLM_TEXT_EVENT_TOOL_CALL_DONE;
         evt.data.tool_call_done.call_id = "call_1";
-        evt.data.tool_call_done.name = "get_device_status";
+        evt.data.tool_call_done.name = g_fake_tool_name;
         evt.data.tool_call_done.arguments = "{}";
         evt.data.tool_call_done.arguments_len = 2;
         cb(&evt, user_ctx);
@@ -234,9 +236,8 @@ typedef struct {
     char tool_outputs[64][1024];
 } agent_collector_t;
 
-static otool_llm_event_action_t agent_collect_cb(const otool_llm_agent_event_t *evt, void *user_ctx)
+static void agent_collect_event(agent_collector_t *col, const otool_llm_agent_event_t *evt)
 {
-    agent_collector_t *col = (agent_collector_t *)user_ctx;
     col->events[col->count] = *evt;
     if (evt->name != NULL) {
         snprintf(col->tool_names[col->count], sizeof(col->tool_names[col->count]), "%s", evt->name);
@@ -262,6 +263,24 @@ static otool_llm_event_action_t agent_collect_cb(const otool_llm_agent_event_t *
             col->text_len += evt->data.text_delta.data_len;
             col->text[col->text_len] = '\0';
         }
+    }
+}
+
+static otool_llm_event_action_t agent_collect_cb(const otool_llm_agent_event_t *evt, void *user_ctx)
+{
+    agent_collector_t *col = (agent_collector_t *)user_ctx;
+    agent_collect_event(col, evt);
+    return OTOOL_LLM_EVENT_ACTION_CONTINUE;
+}
+
+/* 收到 TOOL_EXECUTION_STARTED 后请求取消（callback-driven cancel） */
+static otool_llm_event_action_t agent_cancel_on_tool_start_cb(const otool_llm_agent_event_t *evt,
+                                                              void *user_ctx)
+{
+    agent_collector_t *col = (agent_collector_t *)user_ctx;
+    agent_collect_event(col, evt);
+    if (evt->type == OTOOL_LLM_AGENT_EVENT_TOOL_EXECUTION_STARTED) {
+        return OTOOL_LLM_EVENT_ACTION_CANCEL;
     }
     return OTOOL_LLM_EVENT_ACTION_CONTINUE;
 }
@@ -361,6 +380,226 @@ static void test_agent_limit_and_loop_detection(void)
     (void)0;
 }
 
+/* ---- policy（副作用工具授权） ---- */
+
+static int g_side_effect_exec_count = 0;
+
+static esp_err_t tool_set_volume(const char *arguments_json, char *output_json,
+                                 size_t output_capacity, size_t *output_length,
+                                 const otool_llm_tool_exec_context_t *exec_ctx, void *user_ctx)
+{
+    (void)arguments_json;
+    (void)exec_ctx;
+    (void)user_ctx;
+    g_side_effect_exec_count++;
+    snprintf(output_json, output_capacity, "{\"ok\":true,\"volume\":5}");
+    *output_length = strlen(output_json);
+    return ESP_OK;
+}
+
+static otool_llm_tool_decision_t g_policy_decision = OTOOL_LLM_TOOL_DECISION_DENY;
+static int g_policy_calls = 0;
+
+static otool_llm_tool_decision_t test_policy(const char *tool_name, const char *arguments_json,
+                                             uint32_t tool_flags, void *user_ctx)
+{
+    (void)tool_name;
+    (void)arguments_json;
+    (void)tool_flags;
+    (void)user_ctx;
+    g_policy_calls++;
+    return g_policy_decision;
+}
+
+static void test_agent_policy(void)
+{
+    otool_llm_tool_registry_handle_t reg = NULL;
+    CHECK(otool_llm_tool_registry_create(&reg) == ESP_OK, "policy reg create");
+    otool_llm_tool_definition_t tool = {};
+    tool.struct_size = sizeof(tool);
+    tool.name = "set_volume";
+    tool.description = "set volume";
+    tool.parameters_json_schema =
+        "{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}";
+    tool.flags = OTOOL_LLM_TOOL_SIDE_EFFECTING;
+    tool.execute = tool_set_volume;
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == ESP_OK, "policy add tool");
+    otool_llm_tool_registry_seal(reg);
+
+    g_fake_tool_name = "set_volume";
+
+    /* case 1: policy == NULL → 副作用工具必须被拒绝，executor 不得执行 */
+    otool_llm_agent_config_t cfg = {};
+    cfg.struct_size = sizeof(cfg);
+    cfg.client = (otool_llm_client_handle_t)0x2;
+    cfg.tools = reg;
+    cfg.model = "fake-model";
+    cfg.max_turns = 4;
+    cfg.max_tool_calls = 4;
+    cfg.policy = NULL;
+
+    otool_llm_agent_handle_t agent = NULL;
+    CHECK(otool_llm_agent_create(&cfg, &agent) == ESP_OK, "policy agent create (null policy)");
+
+    agent_collector_t col = { 0 };
+    g_fake_turn = 0;
+    g_side_effect_exec_count = 0;
+    esp_err_t err = otool_llm_agent_run_stream(agent, "调音量", agent_collect_cb, &col);
+    CHECK(err == ESP_OK, "policy null run ok (0x%x)", (unsigned)err);
+    bool saw_failed = false;
+    for (int i = 0; i < col.count; i++) {
+        if (col.events[i].type == OTOOL_LLM_AGENT_EVENT_TOOL_EXECUTION_FAILED) {
+            saw_failed = true;
+            CHECK(strstr(col.events[i].data.tool_execution_finished.output, "permission_denied") !=
+                  NULL,
+                  "denied reason in output");
+        }
+    }
+    CHECK(saw_failed, "policy NULL: tool execution failed");
+    CHECK_EQ_T(g_side_effect_exec_count, 0);
+    otool_llm_agent_destroy(agent);
+
+    /* case 2: policy 返回 DENY → 拒绝且不执行 */
+    cfg.policy = test_policy;
+    g_policy_decision = OTOOL_LLM_TOOL_DECISION_DENY;
+    g_policy_calls = 0;
+    g_side_effect_exec_count = 0;
+    CHECK(otool_llm_agent_create(&cfg, &agent) == ESP_OK, "policy agent create (deny)");
+    col = (agent_collector_t){ 0 };
+    g_fake_turn = 0;
+    err = otool_llm_agent_run_stream(agent, "调音量", agent_collect_cb, &col);
+    CHECK(err == ESP_OK, "policy deny run ok (0x%x)", (unsigned)err);
+    saw_failed = false;
+    for (int i = 0; i < col.count; i++) {
+        if (col.events[i].type == OTOOL_LLM_AGENT_EVENT_TOOL_EXECUTION_FAILED) {
+            saw_failed = true;
+        }
+    }
+    CHECK(saw_failed, "policy DENY: tool execution failed");
+    CHECK(g_policy_calls >= 1, "policy callback invoked");
+    CHECK_EQ_T(g_side_effect_exec_count, 0);
+    otool_llm_agent_destroy(agent);
+
+    /* case 3: policy 返回 ALLOW → 执行成功 */
+    g_policy_decision = OTOOL_LLM_TOOL_DECISION_ALLOW;
+    g_policy_calls = 0;
+    g_side_effect_exec_count = 0;
+    CHECK(otool_llm_agent_create(&cfg, &agent) == ESP_OK, "policy agent create (allow)");
+    col = (agent_collector_t){ 0 };
+    g_fake_turn = 0;
+    err = otool_llm_agent_run_stream(agent, "调音量", agent_collect_cb, &col);
+    CHECK(err == ESP_OK, "policy allow run ok (0x%x)", (unsigned)err);
+    bool saw_finished = false;
+    for (int i = 0; i < col.count; i++) {
+        if (col.events[i].type == OTOOL_LLM_AGENT_EVENT_TOOL_EXECUTION_FINISHED) {
+            saw_finished = true;
+            CHECK(strstr(col.events[i].data.tool_execution_finished.output, "\"ok\":true") != NULL,
+                  "executor output ok");
+        }
+    }
+    CHECK(saw_finished, "policy ALLOW: tool executed");
+    CHECK(g_policy_calls >= 1, "policy callback invoked (allow)");
+    CHECK_EQ_T(g_side_effect_exec_count, 1);
+    otool_llm_agent_destroy(agent);
+
+    otool_llm_tool_registry_destroy(reg);
+    g_fake_tool_name = "get_device_status";
+}
+
+static void test_agent_loop_detection(void)
+{
+    /* 模型每轮请求同一工具同一参数 → 第二轮触发 RUN_LIMIT_REACHED，工具只执行一次 */
+    otool_llm_tool_registry_handle_t reg = NULL;
+    CHECK(otool_llm_tool_registry_create(&reg) == ESP_OK, "loop reg create");
+    otool_llm_tool_definition_t tool = {};
+    tool.struct_size = sizeof(tool);
+    tool.name = "get_device_status";
+    tool.description = "status";
+    tool.parameters_json_schema =
+        "{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}";
+    tool.flags = OTOOL_LLM_TOOL_READ_ONLY;
+    tool.execute = tool_get_device_status;
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == ESP_OK, "loop add tool");
+    otool_llm_tool_registry_seal(reg);
+
+    otool_llm_agent_config_t cfg = {};
+    cfg.struct_size = sizeof(cfg);
+    cfg.client = (otool_llm_client_handle_t)0x2;
+    cfg.tools = reg;
+    cfg.model = "fake-model";
+    cfg.max_turns = 6;
+    cfg.max_tool_calls = 6;
+
+    otool_llm_agent_handle_t agent = NULL;
+    CHECK(otool_llm_agent_create(&cfg, &agent) == ESP_OK, "loop agent create");
+
+    agent_collector_t col = { 0 };
+    g_fake_turn = 0;
+    g_fake_loop = 1;
+    esp_err_t err = otool_llm_agent_run_stream(agent, "状态？", agent_collect_cb, &col);
+    g_fake_loop = 0;
+    CHECK(err == ESP_OK, "loop run ok (0x%x)", (unsigned)err);
+
+    otool_llm_agent_event_type_t last = col.events[col.count - 1].type;
+    CHECK(last == OTOOL_LLM_AGENT_EVENT_RUN_LIMIT_REACHED, "loop terminal RUN_LIMIT_REACHED (got %d)",
+          (int)last);
+
+    int exec_finished = 0;
+    for (int i = 0; i < col.count; i++) {
+        if (col.events[i].type == OTOOL_LLM_AGENT_EVENT_TOOL_EXECUTION_FINISHED) {
+            exec_finished++;
+        }
+    }
+    CHECK_EQ_T(exec_finished, 1); /* 第二轮检测到循环，不重复执行 */
+
+    otool_llm_agent_destroy(agent);
+    otool_llm_tool_registry_destroy(reg);
+}
+
+static void test_agent_callback_cancel(void)
+{
+    /* 回调在工具执行开始后返回 CANCEL → run 以 CANCELLED 终止，无 RUN_COMPLETED */
+    otool_llm_tool_registry_handle_t reg = NULL;
+    CHECK(otool_llm_tool_registry_create(&reg) == ESP_OK, "cb-cancel reg create");
+    otool_llm_tool_definition_t tool = {};
+    tool.struct_size = sizeof(tool);
+    tool.name = "get_device_status";
+    tool.description = "status";
+    tool.parameters_json_schema =
+        "{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}";
+    tool.flags = OTOOL_LLM_TOOL_READ_ONLY;
+    tool.execute = tool_get_device_status;
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == ESP_OK, "cb-cancel add tool");
+    otool_llm_tool_registry_seal(reg);
+
+    otool_llm_agent_config_t cfg = {};
+    cfg.struct_size = sizeof(cfg);
+    cfg.client = (otool_llm_client_handle_t)0x2;
+    cfg.tools = reg;
+    cfg.model = "fake-model";
+    cfg.max_turns = 4;
+    cfg.max_tool_calls = 4;
+
+    otool_llm_agent_handle_t agent = NULL;
+    CHECK(otool_llm_agent_create(&cfg, &agent) == ESP_OK, "cb-cancel agent create");
+
+    agent_collector_t col = { 0 };
+    g_fake_turn = 0;
+    esp_err_t err = otool_llm_agent_run_stream(agent, "状态？", agent_cancel_on_tool_start_cb, &col);
+    CHECK(err == ESP_OK, "cb-cancel run ok (0x%x)", (unsigned)err);
+
+    otool_llm_agent_event_type_t last = col.events[col.count - 1].type;
+    CHECK(last == OTOOL_LLM_AGENT_EVENT_CANCELLED, "cb-cancel terminal CANCELLED (got %d)",
+          (int)last);
+    for (int i = 0; i < col.count; i++) {
+        CHECK(col.events[i].type != OTOOL_LLM_AGENT_EVENT_RUN_COMPLETED,
+              "no RUN_COMPLETED after callback cancel");
+    }
+
+    otool_llm_agent_destroy(agent);
+    otool_llm_tool_registry_destroy(reg);
+}
+
 static void test_agent_chat_local_transcript(void)
 {
     /* LOCAL_TRANSCRIPT + Chat 事件脚本：工具结果通过 transcript 消息回传 */
@@ -433,6 +672,9 @@ int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
     test_agent_tool_loop();
+    test_agent_policy();
+    test_agent_loop_detection();
+    test_agent_callback_cancel();
     test_agent_chat_local_transcript();
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
