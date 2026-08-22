@@ -750,7 +750,7 @@ $ ./host_tests.exe
 
 `main/llm_app.cpp` 实现：
 
-- **网络**：ESP-Hosted（C6 SDIO 4-bit，GPIO 8-13/15）+ 自动 STA 连接（Kconfig：`OTOOL_WIFI_SSID=xiaomibe72` / `OTOOL_WIFI_PASSWORD=1234567890`），断线自动重连（最多 10 次）；
+- **网络**：ESP-Hosted（C6 SDIO 4-bit，GPIO 8-13/15）+ 自动 STA 连接（历史 Kconfig 值已脱敏；当前由 NVS `wifi_ssid` / `wifi_pass` 注入），断线自动重连（最多 10 次）；
 - **关键修复**：C6 供电由 IO 扩展器 `WLAN_PWR_EN`（ADDR_HIGH 0x44 P0）控制，hosted init 前必须 `comp->wlan_power(true)` + 1s 延时（参考工程 c145_tab5_wifi_module_update_ui_project 的启动顺序；缺失时 SDIO `send_op_cond` 超时）；
 - **LLM worker**：专用 task（core 1，16KB stack）阻塞执行 SDK 请求；回调只把 delta 拷入互斥保护的 4KB 共享 buffer，LVGL timer（100ms）同步到界面——LVGL 帧率/触摸不被网络阻塞（§5.4 线程契约落实）；
 - **交互**：点击屏幕立即提问/打断当前请求（真实使用 SDK 跨任务 `otool_llm_request_cancel`，取消后自动进入下一轮）；

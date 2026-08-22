@@ -24,11 +24,24 @@ static const char *TAG = "tool_registry";
 #ifndef CONFIG_OTOOL_LLM_MAX_TOOL_NAME_BYTES
 #define CONFIG_OTOOL_LLM_MAX_TOOL_NAME_BYTES 64
 #endif
+#ifndef CONFIG_OTOOL_LLM_MAX_TOOL_DESCRIPTION_BYTES
+#define CONFIG_OTOOL_LLM_MAX_TOOL_DESCRIPTION_BYTES 512
+#endif
+#ifndef CONFIG_OTOOL_LLM_MAX_TOOL_SCHEMA_BYTES
+#define CONFIG_OTOOL_LLM_MAX_TOOL_SCHEMA_BYTES 2048
+#endif
+#ifndef CONFIG_OTOOL_LLM_MAX_TOTAL_TOOL_SCHEMA_BYTES
+#define CONFIG_OTOOL_LLM_MAX_TOTAL_TOOL_SCHEMA_BYTES 8192
+#endif
+#ifndef CONFIG_OTOOL_LLM_MAX_TOOL_OUTPUT_BYTES
+#define CONFIG_OTOOL_LLM_MAX_TOOL_OUTPUT_BYTES 4096
+#endif
 
 struct otool_llm_tool_registry {
     otool_llm_tool_definition_t *tools;  /* owned array */
     size_t count;
     size_t capacity;
+    size_t schema_bytes;
     bool sealed;
 };
 
@@ -38,7 +51,7 @@ static bool tool_name_valid(const char *name)
         return false;
     }
     size_t len = strlen(name);
-    if (len >= CONFIG_OTOOL_LLM_MAX_TOOL_NAME_BYTES) {
+    if (len > CONFIG_OTOOL_LLM_MAX_TOOL_NAME_BYTES) {
         return false;
     }
     /* 安全字符：字母数字下划线（工具名会出现在 JSON 请求中） */
@@ -97,9 +110,22 @@ esp_err_t otool_llm_tool_registry_add(otool_llm_tool_registry_handle_t reg,
     if (tool->parameters_json_schema == NULL) {
         return OTOOL_LLM_ERR_TOOL_SCHEMA;
     }
+    if (tool->description != NULL &&
+        strlen(tool->description) > CONFIG_OTOOL_LLM_MAX_TOOL_DESCRIPTION_BYTES) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    size_t schema_len = strlen(tool->parameters_json_schema);
+    if (schema_len > CONFIG_OTOOL_LLM_MAX_TOOL_SCHEMA_BYTES ||
+        schema_len > CONFIG_OTOOL_LLM_MAX_TOTAL_TOOL_SCHEMA_BYTES - reg->schema_bytes) {
+        ESP_LOGE(TAG, "tool '%s' schema exceeds configured byte budget", tool->name);
+        return OTOOL_LLM_ERR_TOOL_SCHEMA;
+    }
+    if (tool->max_output_bytes > CONFIG_OTOOL_LLM_MAX_TOOL_OUTPUT_BYTES) {
+        return OTOOL_LLM_ERR_TOOL_OUTPUT_TOO_LARGE;
+    }
     /* schema 注册时校验（两层校验第一层） */
-    esp_err_t err = otool_llm_tool_schema_validate(tool->parameters_json_schema,
-                                                   strlen(tool->parameters_json_schema));
+    esp_err_t err = otool_llm_tool_schema_validate(tool->parameters_json_schema, schema_len,
+                                                   tool->strict);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "tool '%s' schema rejected", tool->name);
         return err;
@@ -116,11 +142,6 @@ esp_err_t otool_llm_tool_registry_add(otool_llm_tool_registry_handle_t reg,
     }
 
     otool_llm_tool_definition_t *dst = &reg->tools[reg->count];
-    err = otool_llm_tool_schema_validate(tool->parameters_json_schema,
-                                         strlen(tool->parameters_json_schema));
-    if (err != ESP_OK) {
-        return err;
-    }
     dst->struct_size = sizeof(*dst);
     dst->strict = tool->strict;
     dst->flags = tool->flags;
@@ -141,6 +162,7 @@ esp_err_t otool_llm_tool_registry_add(otool_llm_tool_registry_handle_t reg,
     dst->name = name;
     dst->description = desc;
     dst->parameters_json_schema = schema;
+    reg->schema_bytes += schema_len;
     reg->count++;
     return ESP_OK;
 }
@@ -152,6 +174,11 @@ esp_err_t otool_llm_tool_registry_seal(otool_llm_tool_registry_handle_t reg)
     }
     reg->sealed = true;
     return ESP_OK;
+}
+
+bool otool_llm_tool_registry_is_sealed(otool_llm_tool_registry_handle_t reg)
+{
+    return reg != NULL && reg->sealed;
 }
 
 void otool_llm_tool_registry_destroy(otool_llm_tool_registry_handle_t reg)

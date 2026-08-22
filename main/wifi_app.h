@@ -12,8 +12,10 @@ extern "C" {
  * @brief Start Wi-Fi via ESP-Hosted (C6 coprocessor).
  *
  * Powers the C6 module (WLAN_PWR_EN via IO expander), initializes the network
- * stack and the STA interface, and starts automatic connection to the SSID
- * configured in Kconfig (OTOOL_WIFI_SSID / OTOOL_WIFI_PASSWORD) with retries.
+ * stack and the STA interface, and starts automatic connection using the
+ * effective credentials (local sdkconfig first, optional NVS fallback).
+ * Missing/invalid credentials are reported as an error and leave Wi-Fi
+ * disabled; the application is expected to continue in offline mode.
  *
  * @param tab5_comp Pointer to the initialized otool_tab5_component (used for
  *                  C6 power control). May be NULL.

@@ -31,7 +31,26 @@ static bool copy_string_field(cJSON *obj, const char *key, char *out, size_t out
     if (!cJSON_IsString(item) || item->valuestring == NULL) {
         return false;
     }
-    snprintf(out, out_size, "%s", item->valuestring);
+    size_t len = strlen(item->valuestring);
+    if (len >= out_size) {
+        out[0] = '\0';
+        return false;
+    }
+    memcpy(out, item->valuestring, len + 1);
+    return true;
+}
+
+static bool parse_tool_index(cJSON *tool_call, uint32_t *out)
+{
+    cJSON *item = get_child(tool_call, "index");
+    if (!cJSON_IsNumber(item) || item->valuedouble < 0 || item->valuedouble > UINT32_MAX) {
+        return false;
+    }
+    uint32_t value = (uint32_t)item->valuedouble;
+    if ((double)value != item->valuedouble) {
+        return false;
+    }
+    *out = value;
     return true;
 }
 
@@ -207,6 +226,11 @@ static esp_err_t chat_on_sse_event(otool_llm_exec_ctx_t *ctx,
         for (int i = 0; i < CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS; i++) {
             otool_llm_pending_tool_call_t *slot = &st->tool_calls[i];
             if (slot->active) {
+                if (strcmp(st->finish_reason, "tool_calls") != 0) {
+                    return otool_llm_exec_report_error(
+                        ctx, OTOOL_LLM_ERR_PROTOCOL,
+                        "active tool call ended without finish_reason=tool_calls", NULL);
+                }
                 otool_llm_text_event_t evt = { .type = OTOOL_LLM_TEXT_EVENT_TOOL_CALL_DONE };
                 evt.data.tool_call_done.output_index = slot->output_index;
                 evt.data.tool_call_done.call_id = slot->call_id[0] ? slot->call_id : NULL;
@@ -274,8 +298,12 @@ static esp_err_t chat_on_sse_event(otool_llm_exec_ctx_t *ctx,
         if (choice != NULL) {
             cJSON *finish = get_child(choice, "finish_reason");
             if (cJSON_IsString(finish) && finish->valuestring != NULL) {
-                snprintf(ctx->proto.chat.finish_reason, sizeof(ctx->proto.chat.finish_reason),
-                         "%s", finish->valuestring);
+                if (!copy_string_field(choice, "finish_reason", ctx->proto.chat.finish_reason,
+                                       sizeof(ctx->proto.chat.finish_reason))) {
+                    err = otool_llm_exec_report_error(ctx, OTOOL_LLM_ERR_PROTOCOL,
+                                                      "finish_reason over budget", NULL);
+                    goto out;
+                }
             }
             cJSON *delta = get_child(choice, "delta");
             cJSON *content = get_child(delta, "content");
@@ -293,8 +321,12 @@ static esp_err_t chat_on_sse_event(otool_llm_exec_ctx_t *ctx,
                 int tc_count = cJSON_GetArraySize(tool_calls);
                 for (int j = 0; j < tc_count; j++) {
                     cJSON *tc = cJSON_GetArrayItem(tool_calls, j);
-                    cJSON *idx = get_child(tc, "index");
-                    uint32_t index = cJSON_IsNumber(idx) ? (uint32_t)idx->valuedouble : 0;
+                    uint32_t index = 0;
+                    if (!parse_tool_index(tc, &index)) {
+                        err = otool_llm_exec_report_error(ctx, OTOOL_LLM_ERR_JSON,
+                                                          "tool call has invalid index", NULL);
+                        goto out;
+                    }
                     otool_llm_chat_state_t *st = &ctx->proto.chat;
                     otool_llm_pending_tool_call_t *slot = NULL;
                     for (int k = 0; k < CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS; k++) {
@@ -307,8 +339,16 @@ static esp_err_t chat_on_sse_event(otool_llm_exec_ctx_t *ctx,
                     cJSON *tc_fn = get_child(tc, "function");
                     cJSON *fn_name = get_child(tc_fn, "name");
                     cJSON *fn_args = get_child(tc_fn, "arguments");
-                    bool is_new = (cJSON_IsString(tc_id) || cJSON_IsString(fn_name));
+                    bool has_id = cJSON_IsString(tc_id) && tc_id->valuestring != NULL;
+                    bool has_name = cJSON_IsString(fn_name) && fn_name->valuestring != NULL;
+                    bool is_new = has_id || has_name;
                     if (slot == NULL && is_new) {
+                        if (!has_id || !has_name) {
+                            err = otool_llm_exec_report_error(
+                                ctx, OTOOL_LLM_ERR_PROTOCOL,
+                                "new tool call requires id and function name", NULL);
+                            goto out;
+                        }
                         for (int k = 0; k < CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS; k++) {
                             if (!st->tool_calls[k].active) {
                                 slot = &st->tool_calls[k];
@@ -323,11 +363,14 @@ static esp_err_t chat_on_sse_event(otool_llm_exec_ctx_t *ctx,
                         memset(slot, 0, sizeof(*slot));
                         slot->active = true;
                         slot->output_index = index;
-                        if (cJSON_IsString(tc_id) && tc_id->valuestring != NULL) {
-                            snprintf(slot->call_id, sizeof(slot->call_id), "%s", tc_id->valuestring);
-                        }
-                        if (cJSON_IsString(fn_name) && fn_name->valuestring != NULL) {
-                            snprintf(slot->name, sizeof(slot->name), "%s", fn_name->valuestring);
+                        if (!copy_string_field(tc, "id", slot->call_id,
+                                               sizeof(slot->call_id)) ||
+                            !copy_string_field(tc_fn, "name", slot->name,
+                                               sizeof(slot->name))) {
+                            err = otool_llm_exec_report_error(
+                                ctx, OTOOL_LLM_ERR_PROTOCOL,
+                                "tool identity missing or over budget", NULL);
+                            goto out;
                         }
                         otool_llm_text_event_t evt = {
                             .type = OTOOL_LLM_TEXT_EVENT_TOOL_CALL_STARTED
@@ -337,6 +380,20 @@ static esp_err_t chat_on_sse_event(otool_llm_exec_ctx_t *ctx,
                             slot->call_id[0] ? slot->call_id : NULL;
                         evt.data.tool_call_started.name = slot->name[0] ? slot->name : NULL;
                         ctx->emit(ctx, &evt);
+                    }
+                    if (slot != NULL &&
+                        ((has_id && strcmp(slot->call_id, tc_id->valuestring) != 0) ||
+                         (has_name && strcmp(slot->name, fn_name->valuestring) != 0))) {
+                        err = otool_llm_exec_report_error(
+                            ctx, OTOOL_LLM_ERR_PROTOCOL,
+                            "tool identity changed for an active index", NULL);
+                        goto out;
+                    }
+                    if (slot == NULL) {
+                        err = otool_llm_exec_report_error(
+                            ctx, OTOOL_LLM_ERR_PROTOCOL,
+                            "tool delta without active tool call", NULL);
+                        goto out;
                     }
                     if (slot != NULL && cJSON_IsString(fn_args) && fn_args->valuestring != NULL) {
                         size_t alen = strlen(fn_args->valuestring);

@@ -6,11 +6,14 @@
 
 #include "otool_llm_internal.h"
 #include "otool_llm_protocol.h"
+#include "otool_llm_tool_schema.h"
 #include "otool_llm_transport.h"
 
 #include "esp_log.h"
 #include "sdkconfig.h"
 
+#include <ctype.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +26,31 @@ static const char *TAG = "otool_llm_request";
 #ifndef CONFIG_OTOOL_LLM_MAX_TOOLS
 #define CONFIG_OTOOL_LLM_MAX_TOOLS 8
 #endif
+#ifndef CONFIG_OTOOL_LLM_MAX_REQUEST_MESSAGES
+#define CONFIG_OTOOL_LLM_MAX_REQUEST_MESSAGES 32
+#endif
+#ifndef CONFIG_OTOOL_LLM_MAX_TOOL_NAME_BYTES
+#define CONFIG_OTOOL_LLM_MAX_TOOL_NAME_BYTES 64
+#endif
+#ifndef CONFIG_OTOOL_LLM_MAX_TOOL_DESCRIPTION_BYTES
+#define CONFIG_OTOOL_LLM_MAX_TOOL_DESCRIPTION_BYTES 512
+#endif
+#ifndef CONFIG_OTOOL_LLM_MAX_TOOL_ARGUMENT_BYTES
+#define CONFIG_OTOOL_LLM_MAX_TOOL_ARGUMENT_BYTES 4096
+#endif
+#ifndef CONFIG_OTOOL_LLM_MAX_TOOL_OUTPUT_BYTES
+#define CONFIG_OTOOL_LLM_MAX_TOOL_OUTPUT_BYTES 4096
+#endif
+#ifndef CONFIG_OTOOL_LLM_MAX_TOOL_SCHEMA_BYTES
+#define CONFIG_OTOOL_LLM_MAX_TOOL_SCHEMA_BYTES 2048
+#endif
+#ifndef CONFIG_OTOOL_LLM_MAX_TOTAL_TOOL_SCHEMA_BYTES
+#define CONFIG_OTOOL_LLM_MAX_TOTAL_TOOL_SCHEMA_BYTES 8192
+#endif
+
+#define OTOOL_LLM_MAX_MODEL_BYTES 256
+#define OTOOL_LLM_MAX_PROVIDER_ID_BYTES 127
+#define OTOOL_LLM_MAX_TOOL_CALL_ID_BYTES 63
 
 /* ---------------- role helpers ---------------- */
 
@@ -178,9 +206,16 @@ static void request_messages_free(otool_llm_request_message_t *messages, size_t 
         return;
     }
     for (size_t i = 0; i < count; i++) {
+        if (messages[i].text != NULL) {
+            otool_llm_secure_zero((void *)messages[i].text, strlen(messages[i].text));
+        }
         free((void *)messages[i].text);
         free((void *)messages[i].tool_call_id);
         for (size_t j = 0; j < messages[i].tool_call_count; j++) {
+            if (messages[i].tool_calls[j].arguments != NULL) {
+                otool_llm_secure_zero((void *)messages[i].tool_calls[j].arguments,
+                                      strlen(messages[i].tool_calls[j].arguments));
+            }
             free((void *)messages[i].tool_calls[j].arguments);
             free((void *)messages[i].tool_calls[j].name);
             free((void *)messages[i].tool_calls[j].id);
@@ -190,11 +225,264 @@ static void request_messages_free(otool_llm_request_message_t *messages, size_t 
     free((void *)messages);
 }
 
+static void request_data_free(otool_llm_request_handle_t request)
+{
+    if (request == NULL) {
+        return;
+    }
+    for (size_t i = 0; i < request->tool_output_count; i++) {
+        if (request->tool_outputs[i].output != NULL) {
+            otool_llm_secure_zero((void *)request->tool_outputs[i].output,
+                                  strlen(request->tool_outputs[i].output));
+        }
+        free((void *)request->tool_outputs[i].output);
+        free((void *)request->tool_outputs[i].call_id);
+    }
+    free((void *)request->tool_outputs);
+    for (size_t i = 0; i < request->tool_count; i++) {
+        free((void *)request->tools[i].parameters_json_schema);
+        free((void *)request->tools[i].description);
+        free((void *)request->tools[i].name);
+    }
+    free((void *)request->tools);
+    request_messages_free(request->messages, request->message_count);
+    if (request->previous_response_id != NULL) {
+        otool_llm_secure_zero((void *)request->previous_response_id,
+                              strlen(request->previous_response_id));
+    }
+    free((void *)request->previous_response_id);
+    if (request->instructions != NULL) {
+        otool_llm_secure_zero((void *)request->instructions, strlen(request->instructions));
+    }
+    free((void *)request->instructions);
+    free((void *)request->model);
+}
+
+static bool bounded_string_length(const char *value, size_t maximum, size_t *out_length)
+{
+    if (value == NULL) {
+        if (out_length != NULL) {
+            *out_length = 0;
+        }
+        return true;
+    }
+    size_t length = 0;
+    while (length <= maximum && value[length] != '\0') {
+        length++;
+    }
+    if (length > maximum) {
+        return false;
+    }
+    if (out_length != NULL) {
+        *out_length = length;
+    }
+    return true;
+}
+
+static esp_err_t account_owned_string(size_t *owned_bytes, const char *value, size_t field_maximum)
+{
+    if (value == NULL) {
+        return ESP_OK;
+    }
+    size_t remaining = *owned_bytes <= CONFIG_OTOOL_LLM_MAX_REQUEST_BYTES
+                           ? CONFIG_OTOOL_LLM_MAX_REQUEST_BYTES - *owned_bytes
+                           : 0;
+    size_t scan_maximum = field_maximum < remaining ? field_maximum : remaining;
+    size_t length = 0;
+    if (!bounded_string_length(value, scan_maximum, &length) || length == remaining) {
+        return OTOOL_LLM_ERR_REQUEST_TOO_LARGE;
+    }
+    *owned_bytes += length + 1;
+    return ESP_OK;
+}
+
+static bool tool_name_valid(const char *name)
+{
+    size_t length = 0;
+    if (name == NULL || name[0] == '\0' ||
+        !bounded_string_length(name, CONFIG_OTOOL_LLM_MAX_TOOL_NAME_BYTES, &length)) {
+        return false;
+    }
+    for (size_t i = 0; i < length; i++) {
+        if (!(isalnum((unsigned char)name[i]) || name[i] == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static esp_err_t request_validate_and_measure(const otool_llm_text_request_t *request,
+                                              otool_llm_protocol_t protocol)
+{
+    if (request->max_output_tokens < 0 ||
+        (request->temperature_is_set && !isfinite(request->temperature))) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (request->message_count > CONFIG_OTOOL_LLM_MAX_REQUEST_MESSAGES) {
+        return OTOOL_LLM_ERR_REQUEST_TOO_LARGE;
+    }
+    if (request->tool_count > CONFIG_OTOOL_LLM_MAX_TOOLS ||
+        request->tool_output_count > CONFIG_OTOOL_LLM_MAX_TOOLS) {
+        return OTOOL_LLM_ERR_TOOL_SCHEMA;
+    }
+
+    size_t owned_bytes = 0;
+    esp_err_t err = account_owned_string(&owned_bytes, request->model, OTOOL_LLM_MAX_MODEL_BYTES);
+    if (err == ESP_OK) {
+        err = account_owned_string(&owned_bytes, request->instructions,
+                                   CONFIG_OTOOL_LLM_MAX_REQUEST_BYTES);
+    }
+    if (err == ESP_OK) {
+        err = account_owned_string(&owned_bytes, request->previous_response_id,
+                                   OTOOL_LLM_MAX_PROVIDER_ID_BYTES);
+    }
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    for (size_t i = 0; i < request->message_count; i++) {
+        const otool_llm_text_message_t *message = &request->messages[i];
+        if (message->role < OTOOL_LLM_ROLE_DEVELOPER || message->role > OTOOL_LLM_ROLE_TOOL ||
+            message->text == NULL ||
+            (message->tool_call_count > 0 && message->tool_calls == NULL) ||
+            message->tool_call_count > CONFIG_OTOOL_LLM_MAX_TOOLS) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        if (protocol == OTOOL_LLM_PROTOCOL_RESPONSES_SSE &&
+            (message->role == OTOOL_LLM_ROLE_TOOL || message->tool_call_count > 0 ||
+             message->tool_call_id != NULL)) {
+            return OTOOL_LLM_ERR_UNSUPPORTED;
+        }
+        if (message->role == OTOOL_LLM_ROLE_TOOL) {
+            size_t ignored = 0;
+            if (message->tool_call_id == NULL || message->tool_call_id[0] == '\0' ||
+                !bounded_string_length(message->tool_call_id,
+                                       OTOOL_LLM_MAX_TOOL_CALL_ID_BYTES, &ignored)) {
+                return ESP_ERR_INVALID_ARG;
+            }
+        } else if (message->tool_call_id != NULL) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        if (message->tool_call_count > 0 && message->role != OTOOL_LLM_ROLE_ASSISTANT) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        err = account_owned_string(&owned_bytes, message->text,
+                                   CONFIG_OTOOL_LLM_MAX_REQUEST_BYTES);
+        if (err == ESP_OK) {
+            err = account_owned_string(&owned_bytes, message->tool_call_id,
+                                       OTOOL_LLM_MAX_TOOL_CALL_ID_BYTES);
+        }
+        if (err != ESP_OK) {
+            return err;
+        }
+        for (size_t j = 0; j < message->tool_call_count; j++) {
+            const otool_llm_tool_call_msg_t *call = &message->tool_calls[j];
+            size_t ignored = 0;
+            if (call->id == NULL || call->id[0] == '\0' ||
+                !bounded_string_length(call->id, OTOOL_LLM_MAX_TOOL_CALL_ID_BYTES, &ignored) ||
+                !tool_name_valid(call->name) || call->arguments == NULL) {
+                return ESP_ERR_INVALID_ARG;
+            }
+            err = account_owned_string(&owned_bytes, call->id,
+                                       OTOOL_LLM_MAX_TOOL_CALL_ID_BYTES);
+            if (err == ESP_OK) {
+                err = account_owned_string(&owned_bytes, call->name,
+                                           CONFIG_OTOOL_LLM_MAX_TOOL_NAME_BYTES);
+            }
+            if (err == ESP_OK) {
+                err = account_owned_string(&owned_bytes, call->arguments,
+                                           CONFIG_OTOOL_LLM_MAX_TOOL_ARGUMENT_BYTES);
+            }
+            if (err != ESP_OK) {
+                return err;
+            }
+        }
+    }
+
+    size_t total_schema_bytes = 0;
+    for (size_t i = 0; i < request->tool_count; i++) {
+        const otool_llm_tool_definition_t *tool = &request->tools[i];
+        size_t description_len = 0;
+        size_t schema_len = 0;
+        if (tool->struct_size < sizeof(*tool)) {
+            return ESP_ERR_INVALID_VERSION;
+        }
+        if (!tool_name_valid(tool->name)) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        if (!bounded_string_length(tool->description,
+                                   CONFIG_OTOOL_LLM_MAX_TOOL_DESCRIPTION_BYTES,
+                                   &description_len)) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        if (tool->parameters_json_schema == NULL ||
+            !bounded_string_length(tool->parameters_json_schema,
+                                   CONFIG_OTOOL_LLM_MAX_TOOL_SCHEMA_BYTES, &schema_len) ||
+            schema_len > CONFIG_OTOOL_LLM_MAX_TOTAL_TOOL_SCHEMA_BYTES - total_schema_bytes) {
+            return OTOOL_LLM_ERR_TOOL_SCHEMA;
+        }
+        if (tool->max_output_bytes > CONFIG_OTOOL_LLM_MAX_TOOL_OUTPUT_BYTES) {
+            return OTOOL_LLM_ERR_TOOL_OUTPUT_TOO_LARGE;
+        }
+        for (size_t j = 0; j < i; j++) {
+            if (strcmp(request->tools[j].name, tool->name) == 0) {
+                return ESP_ERR_INVALID_ARG;
+            }
+        }
+        err = otool_llm_tool_schema_validate(tool->parameters_json_schema, schema_len,
+                                             tool->strict);
+        if (err != ESP_OK) {
+            return err;
+        }
+        total_schema_bytes += schema_len;
+        err = account_owned_string(&owned_bytes, tool->name,
+                                   CONFIG_OTOOL_LLM_MAX_TOOL_NAME_BYTES);
+        if (err == ESP_OK) {
+            err = account_owned_string(&owned_bytes, tool->description,
+                                       CONFIG_OTOOL_LLM_MAX_TOOL_DESCRIPTION_BYTES);
+        }
+        if (err == ESP_OK) {
+            err = account_owned_string(&owned_bytes, tool->parameters_json_schema,
+                                       CONFIG_OTOOL_LLM_MAX_TOOL_SCHEMA_BYTES);
+        }
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+
+    for (size_t i = 0; i < request->tool_output_count; i++) {
+        const otool_llm_tool_output_t *output = &request->tool_outputs[i];
+        size_t ignored = 0;
+        if (output->call_id == NULL || output->call_id[0] == '\0' || output->output == NULL ||
+            !bounded_string_length(output->call_id, OTOOL_LLM_MAX_TOOL_CALL_ID_BYTES, &ignored)) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        if (!bounded_string_length(output->output, CONFIG_OTOOL_LLM_MAX_TOOL_OUTPUT_BYTES,
+                                   &ignored)) {
+            return OTOOL_LLM_ERR_TOOL_OUTPUT_TOO_LARGE;
+        }
+        err = account_owned_string(&owned_bytes, output->call_id,
+                                   OTOOL_LLM_MAX_TOOL_CALL_ID_BYTES);
+        if (err == ESP_OK) {
+            err = account_owned_string(&owned_bytes, output->output,
+                                       CONFIG_OTOOL_LLM_MAX_TOOL_OUTPUT_BYTES);
+        }
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    return ESP_OK;
+}
+
 esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
                                    const otool_llm_text_request_t *request,
                                    otool_llm_request_handle_t *out_request)
 {
-    if (client == NULL || request == NULL || out_request == NULL) {
+    if (out_request == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_request = NULL;
+    if (client == NULL || request == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
     if (request->struct_size < sizeof(otool_llm_text_request_t)) {
@@ -207,11 +495,6 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
     }
     if (request->message_count > 0 && request->messages == NULL) {
         return ESP_ERR_INVALID_ARG;
-    }
-    for (size_t i = 0; i < request->message_count; i++) {
-        if (request->messages[i].text == NULL) {
-            return ESP_ERR_INVALID_ARG;
-        }
     }
 
     /* Fields the Chat protocol cannot express must be rejected, never silently dropped. */
@@ -234,20 +517,13 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
         if (request->tools == NULL) {
             return ESP_ERR_INVALID_ARG;
         }
-        if (request->tool_count > CONFIG_OTOOL_LLM_MAX_TOOLS) {
-            ESP_LOGE(TAG, "tool_count %u > OTOOL_LLM_MAX_TOOLS %u", (unsigned)request->tool_count,
-                     (unsigned)CONFIG_OTOOL_LLM_MAX_TOOLS);
-            return OTOOL_LLM_ERR_TOOL_SCHEMA;
-        }
-        for (size_t i = 0; i < request->tool_count; i++) {
-            if (request->tools[i].name == NULL || request->tools[i].name[0] == '\0' ||
-                request->tools[i].parameters_json_schema == NULL) {
-                return OTOOL_LLM_ERR_TOOL_SCHEMA;
-            }
-        }
     }
     if (request->tool_output_count > 0 && request->tool_outputs == NULL) {
         return ESP_ERR_INVALID_ARG;
+    }
+    esp_err_t err = request_validate_and_measure(request, client->protocol->id);
+    if (err != ESP_OK) {
+        return err;
     }
 
     otool_llm_request_handle_t r = (otool_llm_request_handle_t)calloc(1, sizeof(*r));
@@ -256,7 +532,7 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
     }
     r->client = client;
 
-    esp_err_t err = otool_llm_strdup(request->model, &r->model);
+    err = otool_llm_strdup(request->model, &r->model);
     if (err == ESP_OK) {
         err = otool_llm_strdup(request->instructions, &r->instructions);
     }
@@ -268,6 +544,8 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
         if (r->messages == NULL) {
             err = ESP_ERR_NO_MEM;
         } else {
+            /* Publish zero-initialized ownership immediately so partial OOM cleanup is complete. */
+            r->message_count = request->message_count;
             for (size_t i = 0; i < request->message_count; i++) {
                 r->messages[i].role = request->messages[i].role;
                 err = otool_llm_strdup(request->messages[i].text, &r->messages[i].text);
@@ -283,6 +561,7 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
                     if (r->messages[i].tool_calls == NULL) {
                         err = ESP_ERR_NO_MEM;
                     } else {
+                        r->messages[i].tool_call_count = request->messages[i].tool_call_count;
                         for (size_t j = 0; j < request->messages[i].tool_call_count; j++) {
                             const otool_llm_tool_call_msg_t *src =
                                 &request->messages[i].tool_calls[j];
@@ -301,18 +580,11 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
                                 break;
                             }
                         }
-                        if (err == ESP_OK) {
-                            r->messages[i].tool_call_count =
-                                request->messages[i].tool_call_count;
-                        }
                     }
                 }
                 if (err != ESP_OK) {
                     break;
                 }
-            }
-            if (err == ESP_OK) {
-                r->message_count = request->message_count;
             }
         }
     }
@@ -322,6 +594,7 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
         if (r->tools == NULL) {
             err = ESP_ERR_NO_MEM;
         } else {
+            r->tool_count = request->tool_count;
             for (size_t i = 0; i < request->tool_count; i++) {
                 r->tools[i].struct_size = sizeof(*r->tools);
                 r->tools[i].strict = request->tools[i].strict;
@@ -343,9 +616,6 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
                     break;
                 }
             }
-            if (err == ESP_OK) {
-                r->tool_count = request->tool_count;
-            }
         }
     }
     /* 深拷贝工具输出（function_call_output） */
@@ -355,6 +625,7 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
         if (r->tool_outputs == NULL) {
             err = ESP_ERR_NO_MEM;
         } else {
+            r->tool_output_count = request->tool_output_count;
             for (size_t i = 0; i < request->tool_output_count; i++) {
                 err = otool_llm_strdup(request->tool_outputs[i].call_id,
                                        (char **)&r->tool_outputs[i].call_id);
@@ -366,27 +637,10 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
                     break;
                 }
             }
-            if (err == ESP_OK) {
-                r->tool_output_count = request->tool_output_count;
-            }
         }
     }
     if (err != ESP_OK) {
-        for (size_t i = 0; i < r->tool_output_count; i++) {
-            free((void *)r->tool_outputs[i].output);
-            free((void *)r->tool_outputs[i].call_id);
-        }
-        free((void *)r->tool_outputs);
-        for (size_t i = 0; i < r->tool_count; i++) {
-            free((void *)r->tools[i].parameters_json_schema);
-            free((void *)r->tools[i].description);
-            free((void *)r->tools[i].name);
-        }
-        free((void *)r->tools);
-        request_messages_free(r->messages, r->message_count);
-        free((void *)r->previous_response_id);
-        free((void *)r->instructions);
-        free((void *)r->model);
+        request_data_free(r);
         free(r);
         return err;
     }
@@ -398,21 +652,7 @@ esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,
 
     r->lock = xSemaphoreCreateMutex();
     if (r->lock == NULL) {
-        for (size_t i = 0; i < r->tool_output_count; i++) {
-            free((void *)r->tool_outputs[i].output);
-            free((void *)r->tool_outputs[i].call_id);
-        }
-        free((void *)r->tool_outputs);
-        for (size_t i = 0; i < r->tool_count; i++) {
-            free((void *)r->tools[i].parameters_json_schema);
-            free((void *)r->tools[i].description);
-            free((void *)r->tools[i].name);
-        }
-        free((void *)r->tools);
-        request_messages_free(r->messages, r->message_count);
-        free((void *)r->previous_response_id);
-        free((void *)r->instructions);
-        free((void *)r->model);
+        request_data_free(r);
         free(r);
         return ESP_ERR_NO_MEM;
     }
@@ -450,21 +690,7 @@ void otool_llm_request_destroy(otool_llm_request_handle_t request)
         xSemaphoreGive(request->client->lock);
     }
 
-    for (size_t i = 0; i < request->tool_output_count; i++) {
-        free((void *)request->tool_outputs[i].output);
-        free((void *)request->tool_outputs[i].call_id);
-    }
-    free((void *)request->tool_outputs);
-    for (size_t i = 0; i < request->tool_count; i++) {
-        free((void *)request->tools[i].parameters_json_schema);
-        free((void *)request->tools[i].description);
-        free((void *)request->tools[i].name);
-    }
-    free((void *)request->tools);
-    request_messages_free(request->messages, request->message_count);
-    free((void *)request->previous_response_id);
-    free((void *)request->instructions);
-    free((void *)request->model);
+    request_data_free(request);
     vSemaphoreDelete(request->lock);
     free(request);
 }
@@ -495,12 +721,18 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
 
     /* Claim the client (one in-flight request per client). */
     if (xSemaphoreTake(client->lock, portMAX_DELAY) != pdTRUE) {
-        request->executing = false;
+        if (xSemaphoreTake(request->lock, portMAX_DELAY) == pdTRUE) {
+            request->executing = false;
+            xSemaphoreGive(request->lock);
+        }
         return ESP_ERR_INVALID_STATE;
     }
     if (client->active != NULL) {
         xSemaphoreGive(client->lock);
-        request->executing = false;
+        if (xSemaphoreTake(request->lock, portMAX_DELAY) == pdTRUE) {
+            request->executing = false;
+            xSemaphoreGive(request->lock);
+        }
         return ESP_ERR_INVALID_STATE;
     }
     client->active = request;
@@ -534,6 +766,7 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
 
     esp_err_t err = ESP_OK;
     char *url = NULL; /* 声明于顶部：out_error_local 路径可能跳过分配点 */
+    char auth[1024] = { 0 };
 
     /* 1. Serialize the request body into a bounded buffer. */
     size_t body_cap = CONFIG_OTOOL_LLM_MAX_REQUEST_BYTES;
@@ -570,7 +803,6 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
     strcpy(url, client->base_url);
     strcat(url, path);
 
-    char auth[1024];
     err = client->provider->build_auth_header(client->api_key, auth, sizeof(auth));
     if (err != ESP_OK) {
         goto out_error_local;
@@ -627,7 +859,9 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
         err = ESP_OK;
     }
 
+    otool_llm_secure_zero(auth, sizeof(auth));
     free(url);
+    otool_llm_secure_zero(body, body_cap);
     free(body);
     goto out;
 
@@ -636,7 +870,11 @@ out_error_local:
     if (!ctx->terminal_sent) {
         otool_llm_exec_report_error(ctx, err, esp_err_to_name(err), NULL);
     }
+    otool_llm_secure_zero(auth, sizeof(auth));
     free(url);
+    if (body != NULL) {
+        otool_llm_secure_zero(body, body_cap);
+    }
     free(body);
     err = ctx->error_code != 0 ? ctx->error_code : err;
 

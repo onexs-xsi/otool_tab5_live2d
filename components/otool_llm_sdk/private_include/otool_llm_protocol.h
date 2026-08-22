@@ -60,6 +60,18 @@ typedef struct {
     size_t tool_output_count;
 } otool_llm_request_view_t;
 
+#ifndef CONFIG_OTOOL_LLM_MAX_TOOL_ARGUMENT_BYTES
+#define CONFIG_OTOOL_LLM_MAX_TOOL_ARGUMENT_BYTES 4096
+#endif
+
+#ifndef CONFIG_OTOOL_LLM_MAX_TOOL_NAME_BYTES
+#define CONFIG_OTOOL_LLM_MAX_TOOL_NAME_BYTES 64
+#endif
+
+#ifndef CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS
+#define CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS 2
+#endif
+
 /**
  * @brief One streaming function call being accumulated (per output_index).
  */
@@ -69,14 +81,11 @@ typedef struct {
     uint32_t output_index;
     char item_id[64];
     char call_id[64];
-    char name[64];
-    char arguments[4096];   /**< Accumulated arguments JSON (bounded) */
+    char name[CONFIG_OTOOL_LLM_MAX_TOOL_NAME_BYTES + 1];
+    char arguments[CONFIG_OTOOL_LLM_MAX_TOOL_ARGUMENT_BYTES + 1];
+                            /**< Accumulated arguments JSON plus trailing NUL */
     size_t arguments_len;
 } otool_llm_pending_tool_call_t;
-
-#ifndef CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS
-#define CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS 2
-#endif
 
 /**
  * @brief Responses adapter private state.

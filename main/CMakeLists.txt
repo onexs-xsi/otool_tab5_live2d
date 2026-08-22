@@ -3,6 +3,13 @@ idf_component_register(
     INCLUDE_DIRS "."
     EMBED_FILES
         "fonts/noto_cn_fonts/noto_zh_mid_24.bin"
+        "assets/agent_state_idle_argb8888.bin"
+        "assets/agent_state_listening_argb8888.bin"
+        "assets/agent_state_thinking_argb8888.bin"
+        "assets/agent_state_tool_argb8888.bin"
+        "assets/agent_state_speaking_argb8888.bin"
+        "assets/agent_state_success_argb8888.bin"
+        "assets/agent_state_error_argb8888.bin"
     REQUIRES
         otool_dev_autodetect
         otool_tab5_component
@@ -16,7 +23,8 @@ idf_component_register(
         esp_wifi
         esp_event
         console
+        espressif__cjson
 )
 
-# API Key 不再编译进固件（WP0 安全清理，见 docs/otool_llm_sdk_streaming_voice_implementation_plan.md §8.3）。
-# 运行时由应用通过 otool_llm_client_config_t.api_key 或 Kconfig 注入。
+# 部署凭证由本地 sdkconfig/menuconfig 提供（仓库默认均为空，sdkconfig 已忽略）。
+# credential_store 仍保留 NVS 作为对应 sdkconfig 项为空时的可选后备。

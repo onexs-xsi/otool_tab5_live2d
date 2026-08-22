@@ -38,8 +38,9 @@ typedef struct {
 /**
  * @brief Tool execution callback (synchronous, runs in the agent worker task).
  *
- * Must write a valid UTF-8 JSON object into output_json (bounded by
- * output_capacity) and check cancel/deadline periodically.
+ * On ESP_OK, must write exactly one UTF-8 JSON object, set output_length to
+ * its byte length, and place NUL at output_json[*output_length]. Must stay
+ * within output_capacity and poll cancel/deadline periodically.
  */
 typedef esp_err_t (*otool_llm_tool_execute_cb_t)(
     const char *arguments_json,
@@ -60,7 +61,7 @@ typedef struct {
     const char *name;                      /**< Unique, safe chars only, non-empty */
     const char *description;               /**< Model-facing description */
     const char *parameters_json_schema;    /**< JSON Schema (object) as a string */
-    bool strict;                           /**< Default true (provider strict mode) */
+    bool strict;                           /**< Requires all properties and additionalProperties:false */
     uint32_t flags;                        /**< otool_llm_tool_flags_t bitmask */
     uint32_t timeout_ms;                   /**< Cooperative deadline for execute() */
     size_t max_output_bytes;               /**< Bound for output_json */
@@ -94,9 +95,9 @@ esp_err_t otool_llm_tool_registry_create(otool_llm_tool_registry_handle_t *out_r
  * @brief Add a tool. Deep-copies name/description/schema and validates the
  *        schema up-front (rejected at registration, never at call time).
  *
- * Requirements: unique safe name (<= OTOOL_LLM_MAX_TOOL_NAME_BYTES), valid
- * parameters_json_schema of the supported JSON Schema subset, and
- * (registry not sealed).
+ * Requirements: unique safe name (<= OTOOL_LLM_MAX_TOOL_NAME_BYTES), schema
+ * and output byte budgets, valid parameters_json_schema of the supported JSON
+ * Schema subset, and registry not sealed.
  *
  * @return ESP_OK, ESP_ERR_TOOL_SCHEMA, ESP_ERR_INVALID_ARG (duplicate/bad name),
  *         ESP_ERR_NO_MEM, ESP_ERR_INVALID_STATE (sealed).
@@ -108,6 +109,9 @@ esp_err_t otool_llm_tool_registry_add(otool_llm_tool_registry_handle_t reg,
  * @brief Seal the registry: no more add/remove. Afterwards lookups are lock-free.
  */
 esp_err_t otool_llm_tool_registry_seal(otool_llm_tool_registry_handle_t reg);
+
+/** @brief Whether seal() has made this registry immutable. */
+bool otool_llm_tool_registry_is_sealed(otool_llm_tool_registry_handle_t reg);
 
 /**
  * @brief Destroy the registry (only when no agent/session uses it; see plan §6.1).

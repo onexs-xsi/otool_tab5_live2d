@@ -1,19 +1,20 @@
 menu "otool_tab5_live2d app"
 
 config OTOOL_WIFI_SSID
-    string "Wi-Fi SSID (fallback; runtime value from NVS takes precedence)"
-    default "xiaomibe72"
-    help
-        STA SSID to connect to after ESP-Hosted (C6) init.
-        credential_store (NVS) overrides this at runtime: 'cred set wifi_ssid <name>'.
-
-config OTOOL_WIFI_PASSWORD
-    string "Wi-Fi password (placeholder; real value must be set via NVS)"
+    string "Wi-Fi SSID"
     default ""
     help
-        WP0: 真实密码不写入仓库/固件。运行时通过 console 注入并持久化到 NVS：
-            cred set wifi_pass <password>
-        NVS 未设置时为空，设备无法连接 Wi-Fi。
+      Configure the deployment Wi-Fi SSID in the local sdkconfig/menuconfig.
+      An empty value disables Wi-Fi without aborting application startup.
+      Do not place a real value in sdkconfig.defaults or another tracked file.
+
+config OTOOL_WIFI_PASSWORD
+    string "Wi-Fi password"
+    default ""
+    help
+      Configure the deployment Wi-Fi password in the local sdkconfig/menuconfig.
+      An empty value is accepted for an open network. Do not place a real value
+      in sdkconfig.defaults or another tracked file.
 
 config OTOOL_WIFI_MAX_RETRY
     int "Wi-Fi connect max retries"
@@ -21,14 +22,12 @@ config OTOOL_WIFI_MAX_RETRY
     range 1 100
 
 config OTOOL_LLM_API_KEY
-    string "Doubao Ark API key (runtime credential)"
+    string "Volcengine Ark API key"
     default ""
     help
-        Passed to otool_llm_client at runtime; never compiled into the SDK.
-        Set the value in your local sdkconfig (sdkconfig is git-ignored and
-        never pushed). Example:
-            idf.py menuconfig  ->  otool_tab5_live2d app  ->  Doubao Ark API key
-        or add to sdkconfig.defaults locally without committing it.
+      Configure the deployment API key in the local sdkconfig/menuconfig.
+      An empty value disables the LLM and Agent workers without aborting the
+      application. Do not place a real value in a tracked defaults file.
 
 config OTOOL_LLM_MODEL
     string "Doubao model id"

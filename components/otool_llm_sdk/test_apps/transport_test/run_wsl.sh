@@ -1,31 +1,47 @@
 #!/bin/bash
-# transport_test runner for WSL (output goes to a file, avoids pipe issues)
-set -u
-BASE=/mnt/d/work/otool_tab5_live2d/components/otool_llm_sdk/test_apps
-OUT=$BASE/transport_test/run_result.txt
-: > "$OUT"
-{
-  echo "=== server ==="
-  pkill -f local_sse_server 2>/dev/null
-  cd "$BASE" || exit 1
-  nohup python3 local_sse_server.py 18080 >/tmp/lss5.log 2>&1 &
-  SRV=$!
-  sleep 2
-  curl --max-time 5 -s -o /dev/null -w "server_http=%{http_code}\n" http://127.0.0.1:18080/ok
-  cat /tmp/lss5.log | head -3
+# Build and run the transport matrix on ESP-IDF's Linux target.
+set -euo pipefail
 
-  echo "=== build ==="
-  cd "$BASE/transport_test" || exit 1
-  source ~/esp/esp-idf/export.sh >/dev/null 2>&1 || { echo "export.sh failed"; exit 1; }
-  idf.py set-target linux 2>&1 | tail -1
-  idf.py build 2>&1 | tail -4
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APPS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+OUT="$SCRIPT_DIR/run_result.txt"
+SERVER_LOG="${TMPDIR:-/tmp}/otool_llm_local_sse_server.log"
+SERVER_PID=""
 
-  echo "=== run ==="
-  if [ -x ./build/transport_test.elf ]; then
-    ./build/transport_test.elf 2>&1 | tail -30
-    echo "ELF_RC=${PIPESTATUS[0]}"
-  else
-    echo "ELF NOT BUILT"
+cleanup() {
+  if [[ -n "$SERVER_PID" ]]; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
   fi
-} > "$OUT" 2>&1
-echo "DONE" >> "$OUT"
+}
+trap cleanup EXIT
+
+exec >"$OUT" 2>&1
+
+echo "=== server ==="
+python3 "$APPS_DIR/local_sse_server.py" 18080 >"$SERVER_LOG" 2>&1 &
+SERVER_PID=$!
+sleep 2
+curl --fail --max-time 5 --silent --output /dev/null http://127.0.0.1:18080/ok
+
+echo "=== build ==="
+if [[ -n "${IDF_PATH:-}" && -f "$IDF_PATH/export.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "$IDF_PATH/export.sh" >/dev/null
+elif [[ -f "$HOME/esp/esp-idf/export.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "$HOME/esp/esp-idf/export.sh" >/dev/null
+else
+  echo "ESP-IDF export.sh not found; set IDF_PATH" >&2
+  exit 1
+fi
+
+idf.py -C "$SCRIPT_DIR" -B "$SCRIPT_DIR/build-linux" -D IDF_TARGET=linux build
+
+echo "=== run ==="
+ELF="$SCRIPT_DIR/build-linux/otool_llm_sdk_transport_test.elf"
+if [[ ! -x "$ELF" ]]; then
+  echo "ELF not built: $ELF" >&2
+  exit 1
+fi
+"$ELF"

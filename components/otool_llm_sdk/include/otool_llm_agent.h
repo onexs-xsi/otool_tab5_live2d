@@ -22,7 +22,7 @@ extern "C" {
  */
 typedef enum {
     OTOOL_LLM_AGENT_STATE_REMOTE_RESPONSE_CHAIN = 0, /**< Responses: store=true + previous_response_id */
-    OTOOL_LLM_AGENT_STATE_LOCAL_TRANSCRIPT,          /**< (future) local bounded transcript */
+    OTOOL_LLM_AGENT_STATE_LOCAL_TRANSCRIPT,          /**< Chat: owned bounded local transcript */
 } otool_llm_agent_state_mode_t;
 
 /**
@@ -48,14 +48,14 @@ typedef otool_llm_tool_decision_t (*otool_llm_tool_policy_cb_t)(
 typedef struct {
     size_t struct_size;
     otool_llm_client_handle_t client;              /**< Required */
-    otool_llm_tool_registry_handle_t tools;        /**< Required; should be sealed before run */
+    otool_llm_tool_registry_handle_t tools;        /**< Required; must be sealed before create */
     const char *model;                             /**< Required */
     const char *instructions;                      /**< Optional system instructions */
-    otool_llm_agent_state_mode_t state_mode;       /**< MVP: REMOTE_RESPONSE_CHAIN */
+    otool_llm_agent_state_mode_t state_mode;       /**< Responses remote chain or Chat transcript */
     uint32_t max_turns;                            /**< Default 6 when 0 */
     uint32_t max_tool_calls;                       /**< Default 8 when 0 */
     uint32_t run_timeout_ms;                       /**< Default 120000 when 0 */
-    bool parallel_tool_calls;                      /**< MVP: false */
+    bool parallel_tool_calls;                      /**< Must be false; true returns UNSUPPORTED */
     otool_llm_tool_policy_cb_t policy;             /**< NULL = side-effecting tools denied */
     void *policy_ctx;
 } otool_llm_agent_config_t;
@@ -102,7 +102,7 @@ typedef struct {
             size_t arguments_len;
         } tool_call_ready;
         struct {
-            const char *output;     /**< Tool output (stable JSON or text) */
+            const char *output;     /**< Tool output (one validated UTF-8 JSON object) */
             size_t output_len;
         } tool_execution_finished;
         struct {
@@ -144,7 +144,8 @@ esp_err_t otool_llm_agent_run_stream(otool_llm_agent_handle_t agent,
 esp_err_t otool_llm_agent_cancel(otool_llm_agent_handle_t agent);
 
 /**
- * @brief Reset the session (clears the response chain).
+ * @brief Reset the session (clears the remote response id or local transcript).
+ *        Ignored with an error log while a run is active.
  */
 void otool_llm_agent_reset_session(otool_llm_agent_handle_t agent);
 

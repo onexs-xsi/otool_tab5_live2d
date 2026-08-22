@@ -971,6 +971,73 @@ static void test_responses_tool_half_call_at_terminal(void)
     free(ctx);
 }
 
+static void test_tool_identity_and_index_bounds(void)
+{
+    char long_name[80];
+    memset(long_name, 'x', sizeof(long_name) - 1);
+    long_name[sizeof(long_name) - 1] = '\0';
+    char json[512];
+
+    otool_llm_protocol_ops_t *responses =
+        (otool_llm_protocol_ops_t *)&otool_llm_protocol_responses;
+    otool_llm_exec_ctx_t *ctx = make_ctx();
+    collector_t col = { 0 };
+    ctx->user_ctx = &col;
+    ctx->emit = collector_emit;
+    snprintf(json, sizeof(json),
+             "{\"type\":\"response.output_item.added\",\"output_index\":0,"
+             "\"item\":{\"call_id\":\"c1\",\"name\":\"%s\","
+             "\"type\":\"function_call\"}}",
+             long_name);
+    CHECK(feed_adapter(responses, ctx, "response.output_item.added", json) != ESP_OK,
+          "overlong Responses tool name rejected instead of truncated");
+    CHECK(col.count == 1 && col.events[0].type == OTOOL_LLM_TEXT_EVENT_ERROR,
+          "overlong Responses identity emits terminal error");
+    free_collector(&col);
+    free(ctx);
+
+    ctx = make_ctx();
+    col = (collector_t){ 0 };
+    ctx->user_ctx = &col;
+    ctx->emit = collector_emit;
+    CHECK(feed_adapter(responses, ctx, "response.output_item.added",
+                       "{\"type\":\"response.output_item.added\",\"output_index\":-1,"
+                       "\"item\":{\"call_id\":\"c1\",\"name\":\"t\","
+                       "\"type\":\"function_call\"}}") != ESP_OK,
+          "negative Responses output_index rejected");
+    free_collector(&col);
+    free(ctx);
+
+    otool_llm_protocol_ops_t *chat =
+        (otool_llm_protocol_ops_t *)&otool_llm_protocol_chat;
+    ctx = make_ctx();
+    col = (collector_t){ 0 };
+    ctx->user_ctx = &col;
+    ctx->emit = collector_emit;
+    CHECK(feed_adapter(chat, ctx, "message",
+                       "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+                       "\"id\":\"c1\",\"function\":{\"name\":\"t\","
+                       "\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}") != ESP_OK,
+          "Chat tool call without index rejected");
+    free_collector(&col);
+    free(ctx);
+
+    ctx = make_ctx();
+    col = (collector_t){ 0 };
+    ctx->user_ctx = &col;
+    ctx->emit = collector_emit;
+    CHECK(feed_adapter(chat, ctx, "message",
+                       "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+                       "\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"t\","
+                       "\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}") == ESP_OK,
+          "Chat tool call starts");
+    CHECK(feed_adapter(chat, ctx, "message", "[DONE]") != ESP_OK,
+          "Chat active tool requires finish_reason=tool_calls");
+    CHECK(ctx->terminal_sent, "malformed Chat tool terminal error");
+    free_collector(&col);
+    free(ctx);
+}
+
 static void test_responses_build_request_with_tools(void)
 {
     otool_llm_protocol_ops_t *ops = (otool_llm_protocol_ops_t *)&otool_llm_protocol_responses;
@@ -1027,7 +1094,7 @@ static void test_registry_basic(void)
     tool.name = "get_weather";
     tool.description = "weather";
     tool.parameters_json_schema = good_schema;
-    tool.strict = true;
+    tool.strict = false; /* optional properties are intentionally accepted in this baseline case */
     tool.flags = OTOOL_LLM_TOOL_READ_ONLY;
     CHECK(otool_llm_tool_registry_add(reg, &tool) == ESP_OK, "add tool");
     CHECK_EQ(otool_llm_tool_registry_count(reg), 1);
@@ -1101,6 +1168,24 @@ static void test_registry_schema_rejection(void)
     tool.parameters_json_schema =
         "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"object\",\"properties\":{}}}}";
     CHECK(otool_llm_tool_registry_add(reg, &tool) == OTOOL_LLM_ERR_TOOL_SCHEMA, "nested object");
+
+    /* strict：必须显式 additionalProperties:false，且所有 properties 均 required。 */
+    tool.strict = true;
+    tool.parameters_json_schema =
+        "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"string\"}},"
+        "\"required\":[]}";
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == OTOOL_LLM_ERR_TOOL_SCHEMA,
+          "strict requires additionalProperties false");
+    tool.parameters_json_schema =
+        "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"string\"}},"
+        "\"required\":[],\"additionalProperties\":false}";
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == OTOOL_LLM_ERR_TOOL_SCHEMA,
+          "strict requires every property");
+    tool.name = "strict_ok";
+    tool.parameters_json_schema =
+        "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"string\"}},"
+        "\"required\":[\"a\"],\"additionalProperties\":false}";
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == ESP_OK, "strict schema accepted");
 
     otool_llm_tool_registry_destroy(reg);
 }
@@ -1492,6 +1577,7 @@ int main(void)
     puts("t:resp_tool_flow"); test_responses_tool_call_flow();
     puts("t:resp_tool_mismatch"); test_responses_tool_arguments_mismatch();
     puts("t:resp_tool_half"); test_responses_tool_half_call_at_terminal();
+    puts("t:tool_identity_bounds"); test_tool_identity_and_index_bounds();
     puts("t:resp_build_tools"); test_responses_build_request_with_tools();
 
     puts("t:chat_happy"); test_chat_happy_path();

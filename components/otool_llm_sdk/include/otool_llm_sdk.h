@@ -17,7 +17,7 @@ extern "C" {
 #endif
 
 #define OTOOL_LLM_SDK_VERSION_MAJOR 0
-#define OTOOL_LLM_SDK_VERSION_MINOR 2
+#define OTOOL_LLM_SDK_VERSION_MINOR 3
 #define OTOOL_LLM_SDK_VERSION_PATCH 0
 
 /**
@@ -104,6 +104,7 @@ typedef struct {
  * @return
  *      - ESP_OK on success
  *      - ESP_ERR_INVALID_ARG invalid arguments (provider/protocol combination, missing api_key)
+ *      - ESP_ERR_INVALID_SIZE URL/path/key exceeds its configured boundary
  *      - ESP_ERR_INVALID_VERSION struct_size mismatch
  *      - ESP_ERR_NO_MEM out of memory
  */

@@ -2,8 +2,25 @@
 
 > 基线日期：2026-08-22  
 > 目标组件：`components/otool_llm_sdk`  
-> 计划状态：待实施  
+> 计划状态：Agent MVP `0.3.0` 已实施，进入硬件回归阶段
 > 目标版本：文本/工具 Agent MVP `0.3.0`，可靠性版本 `0.3.x`
+
+## 0. 2026-08-22 范围调整
+
+本轮按当前可测试条件收敛验收范围：
+
+1. OpenAI provider、endpoint preset、Responses/Chat 公共协议代码继续保留，不删除、
+   不故意破坏；但 OpenAI 专属增强、真实服务 smoke test 和官方 SDK 对照暂缓，
+   不作为当前 `0.3.0` 完成阻塞项。
+2. 当前验收对象为公共 Agent Runtime、工具调用、安全/资源上限，以及方舟
+   Responses 和方舟 Chat 两条可测试路径。
+3. 语音、Realtime、WebSocket、音频编解码和豆包语音模型全部冻结，不进入本轮
+   设计、代码或验收；原 ADR 仅保留为历史材料。
+4. 后续恢复 OpenAI 工作时，必须重新执行真实文本流和工具闭环验证，不能把方舟
+   兼容路径的结果写成 OpenAI 实测通过。
+
+因此，下文早期基线中“OpenAI 真实服务必须通过”和“语音探针”的表述是原计划
+目标；若与本节冲突，以本节和文末最新进度记录为准。
 
 ## 1. 执行结论
 
@@ -26,7 +43,7 @@
 - 工具/轮次/内存/超时上限；
 - 跨任务取消；
 - 工具白名单和副作用策略；
-- OpenAI 与火山方舟的真实服务验证。
+- 火山方舟 Responses 与 Chat 的真实服务验证；OpenAI 真实服务验证按 §0 暂缓。
 
 不把官方 Python SDK 或 OpenAI Agents SDK 直接放进固件。官方 SDK、官方示例和真实响应仅作为协议基准、fixture 生成器和主机侧一致性 oracle。
 
@@ -78,7 +95,7 @@
 | P0 | SSE 的 `last_was_cr` 是单次 `feed()` 局部变量，CRLF 跨分片会被识别成两个换行 | `src/transports/sse_parser.c` | CR/LF/CRLF 在任意字节边界切分结果一致 |
 | P1 | custom provider 非法配置、消息复制中途 OOM、鉴权头构建失败存在泄漏路径 | `src/core/client.c`、`src/core/request.c` | 所有失败路径零泄漏 |
 | P1 | client 可在尚存 request handle 时销毁，request 随后可能访问悬空 client | client/request 生命周期 | 引用计数或严格所有权检查 |
-| P1 | OpenAI 未做真实服务 smoke test | 测试记录 | OpenAI Responses 文本与工具调用均实测 |
+| 暂缓 | OpenAI 未做真实服务 smoke test | 测试记录 | 保留 provider；恢复凭证后单独验收，不阻塞当前版本 |
 | P1 | Kconfig/历史文档含实际形态 Wi-Fi 凭证，LLM Key 通过 Kconfig 编入应用固件 | `main/Kconfig`、`main/llm_app.cpp` | 仓库无真实凭证，运行时安全注入 |
 | P2 | host fixture/第三方测试依赖不能保证 clean clone 可复现 | `test_apps/parser_and_adapters` | 一条命令从干净工作区重建并运行 |
 
@@ -503,10 +520,14 @@ OTOOL_LLM_ERR_CONTEXT_FULL
 
 | Kconfig | 默认值 | 说明 |
 |---|---:|---|
+| `OTOOL_LLM_MAX_REQUEST_MESSAGES` | 32 | 单个直接 text request 的消息数上限 |
+| `OTOOL_LLM_MAX_BASE_URL_BYTES` | 512 | provider base URL 上限 |
+| `OTOOL_LLM_MAX_ENDPOINT_PATH_BYTES` | 256 | Responses/Chat 自定义路径上限 |
+| `OTOOL_LLM_MAX_API_KEY_BYTES` | 896 | 运行时 key 上限，确保 Bearer header 有界 |
 | `OTOOL_LLM_MAX_TOOLS` | 8 | registry 工具数 |
 | `OTOOL_LLM_MAX_TOOL_NAME_BYTES` | 64 | 含结尾零前的最大名称 |
 | `OTOOL_LLM_MAX_TOOL_SCHEMA_BYTES` | 2048 | 单工具 schema |
-| `OTOOL_LLM_MAX_TOOL_SCHEMA_TOTAL_BYTES` | 8192 | 所有 schema 总和 |
+| `OTOOL_LLM_MAX_TOTAL_TOOL_SCHEMA_BYTES` | 8192 | 所有 schema 总和 |
 | `OTOOL_LLM_MAX_PENDING_TOOL_CALLS` | 2 | 单 turn 防御性上限 |
 | `OTOOL_LLM_MAX_TOOL_ARGUMENT_BYTES` | 4096 | 单次 arguments |
 | `OTOOL_LLM_MAX_TOOL_OUTPUT_BYTES` | 4096 | 单次 output |
@@ -677,27 +698,29 @@ Gate：真机连续完成“查设备状态 → 工具执行 → 中文最终回
 
 fixture 来源：
 
-- 官方 OpenAI SDK/HTTP 生成的清洗 Responses 流；
 - 火山方舟官方接口生成的清洗 Responses/Chat 流；
 - 手工构造的错误、超限、乱序和断流 fixture。
+- OpenAI 官方 SDK/HTTP 录制 fixture 随 OpenAI 真实验证一并暂缓，不得用方舟
+  fixture 代替。
 
 fixture 不得包含真实回答、Key、request id 或个人数据；保留事件结构和字段类型即可。
 
 Gate：一条 host 命令和一条 IDF test app 命令有文档、有稳定结果。
 
-### WP8：双 provider live smoke
+### WP8：当前方舟 live smoke（OpenAI 暂缓）
 
 使用运行时临时凭证，最少验证：
 
 | Provider/协议 | 普通文本 | 单工具 | 工具失败恢复 | 取消 |
 |---|---:|---:|---:|---:|
-| OpenAI Responses | 必须 | 必须 | 必须 | 必须 |
 | Ark Responses | 必须 | 必须 | 必须 | 必须 |
 | Ark Chat | 必须 | 必须 | 必须 | 必须 |
+| OpenAI Responses | 暂缓 | 暂缓 | 暂缓 | 暂缓 |
 
 每条测试只做最小调用，控制费用；原始日志立即清洗，只提交事件清单、耗时和结果，不提交密钥。
 
-Gate：三条协议都完成真实 tool loop；OpenAI 不再只是代码推断。
+当前 Gate：Ark Responses 与 Ark Chat 完成真实 tool loop。OpenAI 行仅说明代码仍在，
+不计入当前 Gate；恢复时另开验收记录。
 
 ### WP9：可靠性、资源和安全报告
 
@@ -726,9 +749,9 @@ Gate：三条协议都完成真实 tool loop；OpenAI 不再只是代码推断�
 
 Gate：无增长性泄漏、无 WDT、无 UI 卡死、无取消后 callback、无重复副作用执行。
 
-### WP10：语音扩展 ADR
+### WP10：语音扩展（本轮冻结）
 
-文本 Agent 稳定后再确定：
+以下仅保留为历史候选，本轮不实施、不测试，也不计入 Gate：
 
 - ASR → 文本 Agent → TTS 的半双工链路；
 - 或 Ark/OpenAI Realtime WebSocket 的全双工链路；
@@ -736,7 +759,7 @@ Gate：无增长性泄漏、无 WDT、无 UI 卡死、无取消后 callback、�
 - Realtime tool calling 如何映射到相同 registry 和 policy；
 - 是否新增 `otool_llm_realtime.h`，禁止污染 `otool_llm_text.h`。
 
-Gate：提交 ADR 和最小协议探针；未完成前不把语音代码混入 Agent MVP。
+本轮 Gate：SDK 和应用不新增语音代码。既有 ADR/探针不代表语音功能完成。
 
 ## 16. 测试矩阵
 
@@ -782,12 +805,13 @@ Gate：提交 ADR 和最小协议探针；未完成前不把语音代码混入 A
 
 ## 17. Definition of Done
 
-`otool_llm_sdk` Agent MVP 只有同时满足以下条件才算完成：
+当前范围的 `otool_llm_sdk` Agent MVP 只有同时满足以下条件才算完成：
 
 - ESP32-P4 + 当前锁定 ESP-IDF 能 clean build；
 - 原有文本 API 无破坏性回归；
 - P0/P1 审计缺陷已修复并有回归测试；
-- OpenAI Responses 与 Ark Responses 支持流式 function calling；
+- 公共 Responses adapter 与 Ark Responses 支持流式 function calling；OpenAI provider
+  代码保留但不声明真实服务已通过；
 - Ark Chat 支持流式 tool_calls；
 - 本地工具 registry、strict schema 子集验证和白名单策略可用；
 - 能自动完成至少一轮 tool call → tool output → final answer；
@@ -795,7 +819,7 @@ Gate：提交 ADR 和最小协议探针；未完成前不把语音代码混入 A
 - 网络/工具/Agent 取消统一且不 reconnect、不重发副作用；
 - 每个模型 request 与每个 Agent run 各恰好一个 terminal event；
 - terminal ERROR 的事件 code 与函数返回值一致；
-- OpenAI、Ark Responses、Ark Chat 三条真实 smoke 全通过；
+- Ark Responses、Ark Chat 两条真实 smoke 通过；OpenAI smoke 暂缓；
 - host、Unity/设备、可靠性测试和资源报告齐全；
 - 仓库、固件默认配置、fixture 和日志无真实凭证；
 - README 有最小文本、单工具 Agent、取消和安全示例；
@@ -1125,3 +1149,122 @@ Host 测试全绿：host_tests 1386 + agent_host_tests 98。
 - 设备固件已更新（CONTEXT_FULL + 401 + ERROR msg），真机正常 run 回归通过。
 
 Host 测试全绿：host_tests 1386 + agent_host_tests 134。
+
+### 2026-08-22 — `0.3.0` 当前范围收口（OpenAI live 暂缓、语音冻结）
+
+本轮按 §0 的新范围完成了 Agent 公共层与方舟兼容路径的代码收口。
+
+#### Agent Runtime 与工具契约
+
+- 修复 Agent 活动 request 发布/销毁与跨 task cancel 的生命周期竞争：状态 mutex
+  在取消期间固定 request 生命周期，避免 cancel 与 destroy 形成 UAF；同一 Agent 仍只允许
+  一个 run。
+- callback 在 `TOOL_EXECUTION_STARTED` 返回取消后，executor 不再被调用；取消、失败和
+  transcript 写入失败均只产生一个 Agent terminal event。
+- 工具事件不再依赖“最后一个调用”，而是按 `output_index` 关联；两个工具参数交错到达
+  也能正确组装和回传。
+- 工具输出必须是精确长度、NUL 结尾、无内嵌 NUL 的 UTF-8 JSON object，并同时受
+  per-tool/global byte budget 约束；非法 JSON、越界、缺 NUL 和协作式超时均返回稳定错误。
+- 工具参数缓冲改为 Kconfig 大小加一个 NUL 字节，`4096` 的配置现在确实允许
+  `4096` 字节 payload，而非少一个字节；超限显式失败。
+- `strict=true` schema 必须显式 `additionalProperties:false`，且每个 property 都在
+  `required` 中；registry 增加单 schema、总 schema 和 per-tool output 预算，并要求 seal
+  后才能创建 Agent。`parallel_tool_calls=true` 当前明确返回 `UNSUPPORTED`。
+- Responses 跨 run 保留最终 `response_id`；Chat transcript 跨 run 持久保存完整
+  user/assistant tool_calls/tool/final assistant 消息。失败/取消回滚本次 run，reset 同时清理
+  两种状态。
+- `response.incomplete` 不再误报 `RUN_COMPLETED`，而是结束为
+  `RUN_LIMIT_REACHED`；超长 tool id/name、负数/小数 index 和 Chat 非法工具终止不再被
+  截断或默认映射为 index 0。
+- 直接 `request_create()` 路径现在也在任何深拷贝前执行消息数、总字符串内存、工具名/
+  描述/schema/输出和 Chat/Responses 字段语义校验；深拷贝中途 OOM 会释放所有已取得的
+  半成品所有权，不再泄漏。
+- `client_create()` 的 base URL、endpoint path 和运行时 key 先校验格式/长度再分配；
+  非法 custom URL 不再走分配后早退的泄漏路径，测试用明文模式也只接受 HTTP(S)。
+- request 销毁会清零已复制的 prompt/instructions/tool arguments/tool output；每次传输结束
+  也会清零 Bearer header 和序列化请求体，降低凭证与会话内容在空闲堆/栈中的残留。
+- 应用凭证 cache 通过 mutex 串行化，并改为向 worker 的临时缓冲复制，不再跨 task
+  返回可被 console 更新同时清零的静态 secret 指针；client 深拷贝后立即清零临时 key。
+- 应用删除 Wi-Fi SSID/密码的 Kconfig 项；Wi-Fi 与 LLM key 均只从运行时 NVS 读取，
+  旧本地 `sdkconfig` 值不会再参与编译或进入新固件。
+
+#### 应用与安全
+
+- 应用注册 `get_device_status`（只读）和 `set_ui_status`（可逆、应用内副作用）两个
+  strict 工具；副作用工具只允许 policy 显式放行的名称。
+- `agent <new text>` 会取消旧 run 并保留最新问题；新增 `agent-reset`，由 worker 串行取消
+  当前 run 后清理会话。busy/cancel/reset/round 跨 task 状态改为原子变量。
+- console 不再打印 prompt、arguments、tool output 或 secret 前缀，只输出 byte count；
+  runtime credential cache 在覆盖/删除时清零。默认 Kconfig 不再携带 Wi-Fi/LLM 凭证，
+  历史文档中的凭证形态已脱敏。
+- NVS 未启用加密时应用会明确警告；生产 NVS/flash 加密仍属于制造与部署配置，未在
+  开发固件中擅自开启。
+
+#### 复现资产与验证结果
+
+- 组件版本和 manifest 同步到 `0.3.0`；README 补齐文本流、Agent/tool、会话、取消、
+  安全、Kconfig budget 与测试命令。
+- host 测试 vendored cJSON、License 和 FreeRTOS mutex shim 已纳入仓库；方舟 Responses/
+  Chat 的脱敏最小 tool-call fixture 已落地。OpenAI fixture 不伪造，随其 live 验收暂缓。
+- 宿主一键测试：`host_tests 1396 checks, 0 failures`；
+  `agent_host_tests 180 checks, 0 failures`。
+- 独立 `transport_test` 已修成标准 ESP-IDF project，修正了原先“请求完成后才取消”的
+  假取消用例，并加入直接 request/client 的边界拒绝用例；ESP32-P4 编译通过，
+  固件 `0xa6300` 字节。
+- 主工程 ESP-IDF v6.1-beta1 / ESP32-P4 增量全量链接通过，应用固件
+  `0x2f0400` 字节，最小 app partition 余量约 80%。
+- Linux/WSL transport runtime 本轮未执行；runner 已改为相对路径、独立 build 目录，
+  且只回收自身启动的 fixture server，待具备可用 Linux ESP-IDF 环境后运行。
+
+#### 当前不阻塞 `0.3.0` 的外部/部署项
+
+- OpenAI provider 和共用协议代码保留；OpenAI 真实文本/工具 smoke、专属 fixture 与
+  专属增强暂缓，不能标记为已验证。
+- 语音相关工作全部冻结，本轮未新增语音实现。
+- 新固件未在本轮擅自 flash；方舟真机工具闭环引用本文件前序实测证据。合入后仍应在
+  目标板执行 Responses、Chat、cancel/reset、副作用 policy deny/allow 和长稳回归。
+- 不合作退出的同步工具无法被 SDK 强制抢占，仍必须遵守 `cancel_requested` 与
+  `deadline_us`；生产加密和硬件稳定性仍需部署/目标板验收。
+
+### 2026-08-22 — 凭据策略修订与缺配置崩溃修复
+
+本节覆盖此前“应用凭据仅从 NVS 读取”的决定；SDK 的 provider/API 不变，仅调整 Tab5
+示例应用的部署配置和故障降级行为。
+
+#### 最终配置策略
+
+- `main/Kconfig` 提供 `OTOOL_WIFI_SSID`、`OTOOL_WIFI_PASSWORD`、
+  `OTOOL_LLM_API_KEY`，仓库默认值全部为空；使用者在本地 `sdkconfig`/menuconfig 中手动
+  配置，禁止将真实值写入受版本控制的 `sdkconfig.defaults` 或源码。
+- 有效值优先级固定为 **非空 sdkconfig > NVS fallback > 空值**。NVS 命令仅为兼容和
+  救援后备；非空 sdkconfig 存在时，运行期 `cred-set` 不覆盖编译配置。
+- `cred` 显示的是有效值且始终脱敏；`cred-set`/`cred-clear` 的帮助和结果明确标注只操作
+  NVS fallback。
+- 这一部署选择会把配置值编入固件镜像。不得把本地 `sdkconfig`、build 目录、固件镜像
+  或 core dump 当作无密钥产物分发；量产仍需 flash encryption 与独立轮换/注入策略。
+
+#### 非致命降级契约
+
+- Wi-Fi 在 C6 上电和 ESP-Hosted 初始化前读取并校验有效配置。SSID 为空返回
+  `ESP_ERR_NOT_FOUND`，长度非法返回 `ESP_ERR_INVALID_SIZE`；二者均不创建半初始化网络。
+- `app_main()` 不再对 `wifi_app_start()` 使用 `ESP_ERROR_CHECK`。缺配置或网络初始化失败
+  只进入 offline mode，随后继续启动 LLM/Agent 状态对象、LVGL UI 与 USB console。
+- Wi-Fi 未成功启动时 `wifi-reconnect` 返回 `ESP_ERR_INVALID_STATE`，不会调用未初始化的
+  `esp_wifi_disconnect/connect`；断线事件会同步清除 connected bit。
+- LLM/Agent worker 在等待 Wi-Fi 前检查有效 API key。Key 为空时写入可查询的 disabled
+  状态并正常结束自身 task，不 panic、不永久等待网络；UI/console 仍可使用。
+- 空 Wi-Fi 密码按开放网络处理；非空密码使用 WPA2 门槛。32-byte SSID 与 64-byte 密码
+  采用定长复制，不要求目标数组额外容纳 NUL。
+
+#### 验收状态
+
+- [x] 当前本地 `sdkconfig` 的主工程 ESP32-P4 全量构建通过；日志经过凭据配置行过滤，
+  未回显配置值。最终固件 `0x2f0900` 字节，最小 app partition 余量约 80%。
+- [x] 独立空凭据 `sdkconfig` 全量构建通过；最终固件 `0x2f0830` 字节，未读取或覆盖
+  开发者的本地 `sdkconfig`。
+- [ ] 空凭据固件真机启动：日志只报告 disabled/offline，显示和 console 正常出现，且不出现
+  `abort()`、Guru Meditation 或 `ESP_ERROR_CHECK failed`。本轮未擅自刷机，待目标板验收。
+- [ ] 仅 SSID/密码存在、API key 为空时 Wi-Fi 可连接，LLM/Agent 显示 disabled 且不崩溃。
+- [ ] 非空 sdkconfig 与 NVS 同时存在时，脱敏状态和实际连接均遵循 sdkconfig 优先。
+- [x] tracked 文件与本机非空 sdkconfig 凭据自动比对为 0 命中；本机 API key 当前为空，
+  审计过程未输出任何凭据值。`sdkconfig` 已由 Git 忽略，`git diff --check` 通过。

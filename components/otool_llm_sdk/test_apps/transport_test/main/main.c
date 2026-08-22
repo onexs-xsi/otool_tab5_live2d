@@ -13,6 +13,8 @@
 #include "otool_llm_text.h"
 
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "sdkconfig.h"
 
 #include <stdio.h>
@@ -158,6 +160,11 @@ static esp_err_t run_case(const char *name, const char *path, otool_llm_protocol
     err = otool_llm_request_create(client, &req, &request);
     CHECK(err == ESP_OK, "%s: request create", name);
 
+    if (err != ESP_OK) {
+        otool_llm_client_destroy(client);
+        return err;
+    }
+
     err = otool_llm_request_execute_stream(request, on_event, &st);
 
     CHECK(st.terminal == expect_terminal, "%s: terminal expected type %d got %d", name,
@@ -192,13 +199,12 @@ static esp_err_t run_case(const char *name, const char *path, otool_llm_protocol
 typedef struct {
     otool_llm_request_handle_t request;
     test_state_t *state;
-    volatile bool start_cancel;
 } cancel_args_t;
 
 static void cancel_task(void *arg)
 {
     cancel_args_t *ca = (cancel_args_t *)arg;
-    while (!ca->start_cancel) {
+    while (ca->state->delta_count == 0) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     /* cancel after the first delta arrived */
@@ -243,12 +249,10 @@ static void test_cancel(int iteration)
     cancel_args_t ca = {
         .request = request,
         .state = &st,
-        .start_cancel = false,
     };
     CHECK(xTaskCreate(cancel_task, "cancel", 4096, &ca, 5, NULL) == pdPASS, "cancel%d: task create", iteration);
 
     esp_err_t err = otool_llm_request_execute_stream(request, on_event, &st);
-    ca.start_cancel = true;
 
     CHECK(st.terminal == OTOOL_LLM_TEXT_EVENT_CANCELLED, "cancel%d: terminal expected CANCELLED got %d",
           iteration, (int)st.terminal);
@@ -371,8 +375,19 @@ static void test_config_validation(void)
     cfg.struct_size = 4;
     CHECK(otool_llm_client_create(&cfg, &client) == ESP_ERR_INVALID_VERSION, "small struct_size rejected");
 
-    /* chat protocol rejects responses-only fields */
     cfg.struct_size = sizeof(cfg);
+    cfg.base_url = "not-a-url";
+    client = (otool_llm_client_handle_t)(uintptr_t)1;
+    CHECK(otool_llm_client_create(&cfg, &client) == ESP_ERR_INVALID_ARG && client == NULL,
+          "invalid custom URL rejected before allocation");
+
+    cfg.base_url = "http://localhost:1";
+    cfg.responses_path = "responses";
+    CHECK(otool_llm_client_create(&cfg, &client) == ESP_ERR_INVALID_ARG,
+          "endpoint path without leading slash rejected");
+
+    /* chat protocol rejects responses-only fields */
+    cfg.responses_path = NULL;
     cfg.protocol = OTOOL_LLM_PROTOCOL_CHAT_COMPLETIONS_SSE;
     otool_llm_client_handle_t c2 = NULL;
     CHECK(otool_llm_client_create(&cfg, &c2) == ESP_OK, "valid custom client");
@@ -387,7 +402,67 @@ static void test_config_validation(void)
     otool_llm_request_handle_t r = NULL;
     CHECK(otool_llm_request_create(c2, &req, &r) == OTOOL_LLM_ERR_UNSUPPORTED,
           "chat + previous_response_id rejected");
+
+    req.previous_response_id = NULL;
+    msg.role = OTOOL_LLM_ROLE_TOOL;
+    CHECK(otool_llm_request_create(c2, &req, &r) == ESP_ERR_INVALID_ARG,
+          "chat tool message without call id rejected");
+
+    msg.role = OTOOL_LLM_ROLE_USER;
+    otool_llm_tool_definition_t tool = {
+        .struct_size = sizeof(tool),
+        .name = "get_status",
+        .description = "Return status",
+        .parameters_json_schema =
+            "{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}",
+        .strict = true,
+        .max_output_bytes = 128,
+    };
+    req.tools = &tool;
+    req.tool_count = 1;
+    CHECK(otool_llm_request_create(c2, &req, &r) == ESP_OK,
+          "bounded strict tool accepted by direct request");
+    otool_llm_request_destroy(r);
+    r = NULL;
+
+    tool.parameters_json_schema = "{\"type\":\"object\",\"properties\":{}}";
+    CHECK(otool_llm_request_create(c2, &req, &r) == OTOOL_LLM_ERR_TOOL_SCHEMA,
+          "invalid strict tool rejected by direct request");
     otool_llm_client_destroy(c2);
+
+    /* Responses rejects Chat transcript tool fields rather than silently dropping them. */
+    cfg.protocol = OTOOL_LLM_PROTOCOL_RESPONSES_SSE;
+    otool_llm_client_handle_t c3 = NULL;
+    CHECK(otool_llm_client_create(&cfg, &c3) == ESP_OK, "valid responses client");
+    otool_llm_tool_call_msg_t call = {
+        .id = "call_1",
+        .name = "get_status",
+        .arguments = "{}",
+    };
+    msg.role = OTOOL_LLM_ROLE_ASSISTANT;
+    msg.tool_calls = &call;
+    msg.tool_call_count = 1;
+    req.tools = NULL;
+    req.tool_count = 0;
+    CHECK(otool_llm_request_create(c3, &req, &r) == OTOOL_LLM_ERR_UNSUPPORTED,
+          "responses + chat transcript tool call rejected");
+
+    msg.role = OTOOL_LLM_ROLE_USER;
+    msg.tool_calls = NULL;
+    msg.tool_call_count = 0;
+    char *large_output = (char *)malloc(CONFIG_OTOOL_LLM_MAX_TOOL_OUTPUT_BYTES + 2);
+    CHECK(large_output != NULL, "allocate oversized tool output fixture");
+    if (large_output != NULL) {
+        memset(large_output, 'x', CONFIG_OTOOL_LLM_MAX_TOOL_OUTPUT_BYTES + 1);
+        large_output[CONFIG_OTOOL_LLM_MAX_TOOL_OUTPUT_BYTES + 1] = '\0';
+        otool_llm_tool_output_t output = { .call_id = "call_1", .output = large_output };
+        req.tool_outputs = &output;
+        req.tool_output_count = 1;
+        CHECK(otool_llm_request_create(c3, &req, &r) == OTOOL_LLM_ERR_TOOL_OUTPUT_TOO_LARGE,
+              "oversized direct tool output rejected before copy");
+        free(large_output);
+    }
+    otool_llm_client_destroy(c3);
 }
 
 #ifdef CONFIG_IDF_TARGET_LINUX

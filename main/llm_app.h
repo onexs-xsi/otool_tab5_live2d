@@ -21,6 +21,7 @@ typedef struct {
  * @brief Start the LLM worker (blocking requests on its own task).
  *
  * Does NOT create any UI; the UI is managed by ui_app_start(). The worker
+ * disables itself cleanly when the effective API key is empty; otherwise it
  * waits for Wi-Fi (wifi_app) before the first request and then only acts on
  * triggers (tap / llm-ask console command).
  */

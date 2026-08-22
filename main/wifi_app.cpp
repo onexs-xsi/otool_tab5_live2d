@@ -20,11 +20,20 @@
 
 static const char *TAG = "wifi_app";
 
+static void secure_zero_local(void *value, size_t length)
+{
+    volatile unsigned char *p = static_cast<volatile unsigned char *>(value);
+    while (length-- > 0) {
+        *p++ = 0;
+    }
+}
+
 static constexpr EventBits_t WIFI_CONNECTED_BIT = BIT0;
 
 static EventGroupHandle_t s_wifi_events = nullptr;
 static int s_wifi_retries = 0;
 static void *s_tab5_comp = nullptr;
+static bool s_wifi_started = false;
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
@@ -32,9 +41,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     (void)event_data;
 
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        ESP_LOGI(TAG, "STA start, connecting to %s", CONFIG_OTOOL_WIFI_SSID);
+        ESP_LOGI(TAG, "STA start, connecting with configured credentials");
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        xEventGroupClearBits(s_wifi_events, WIFI_CONNECTED_BIT);
         if (s_wifi_retries < CONFIG_OTOOL_WIFI_MAX_RETRY) {
             s_wifi_retries++;
             ESP_LOGW(TAG, "disconnected (retry %d/%d), reconnecting...", s_wifi_retries,
@@ -55,9 +65,43 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 esp_err_t wifi_app_start(void *tab5_comp)
 {
     s_tab5_comp = tab5_comp;
-    s_wifi_events = xEventGroupCreate();
     if (s_wifi_events == nullptr) {
-        return ESP_ERR_NO_MEM;
+        s_wifi_events = xEventGroupCreate();
+        if (s_wifi_events == nullptr) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    /* Validate credentials before powering the C6 or creating a partial Wi-Fi
+     * stack. Missing configuration is an intentional offline mode. */
+    char configured_ssid[256] = { 0 };
+    char configured_password[256] = { 0 };
+    esp_err_t err =
+        credential_store_copy_runtime("wifi_ssid", configured_ssid, sizeof(configured_ssid));
+    if (err == ESP_OK) {
+        err = credential_store_copy_runtime("wifi_pass", configured_password,
+                                            sizeof(configured_password));
+    }
+    size_t ssid_len = strlen(configured_ssid);
+    size_t password_len = strlen(configured_password);
+    if (err != ESP_OK) {
+        secure_zero_local(configured_password, sizeof(configured_password));
+        secure_zero_local(configured_ssid, sizeof(configured_ssid));
+        ESP_LOGE(TAG, "Wi-Fi disabled: credential lookup failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    if (ssid_len == 0) {
+        secure_zero_local(configured_password, sizeof(configured_password));
+        secure_zero_local(configured_ssid, sizeof(configured_ssid));
+        ESP_LOGW(TAG, "Wi-Fi disabled: CONFIG_OTOOL_WIFI_SSID is empty");
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (ssid_len > sizeof(((wifi_config_t *)0)->sta.ssid) ||
+        password_len > sizeof(((wifi_config_t *)0)->sta.password)) {
+        secure_zero_local(configured_password, sizeof(configured_password));
+        secure_zero_local(configured_ssid, sizeof(configured_ssid));
+        ESP_LOGE(TAG, "Wi-Fi disabled: configured SSID or password is too long");
+        return ESP_ERR_INVALID_SIZE;
     }
 
     /* C6 模块上电：WLAN_PWR_EN 由 IO 扩展器（ADDR_HIGH 0x44 P0）控制。
@@ -75,13 +119,17 @@ esp_err_t wifi_app_start(void *tab5_comp)
     ESP_LOGI(TAG, "ESP-Hosted init (C6 SDIO)...");
 
     /* 基础网络栈（nvs_flash_init 已在 app_main 完成） */
-    esp_err_t err = esp_netif_init();
+    err = esp_netif_init();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        secure_zero_local(configured_password, sizeof(configured_password));
+        secure_zero_local(configured_ssid, sizeof(configured_ssid));
         ESP_LOGE(TAG, "esp_netif_init: %s", esp_err_to_name(err));
         return err;
     }
     err = esp_event_loop_create_default();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        secure_zero_local(configured_password, sizeof(configured_password));
+        secure_zero_local(configured_ssid, sizeof(configured_ssid));
         ESP_LOGE(TAG, "esp_event_loop_create_default: %s", esp_err_to_name(err));
         return err;
     }
@@ -94,17 +142,23 @@ esp_err_t wifi_app_start(void *tab5_comp)
     wcfg.static_rx_buf_num = 16;
     err = esp_wifi_init(&wcfg);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        secure_zero_local(configured_password, sizeof(configured_password));
+        secure_zero_local(configured_ssid, sizeof(configured_ssid));
         ESP_LOGE(TAG, "esp_wifi_init: %s", esp_err_to_name(err));
         return err;
     }
 
     err = esp_wifi_set_storage(WIFI_STORAGE_RAM);
     if (err != ESP_OK) {
+        secure_zero_local(configured_password, sizeof(configured_password));
+        secure_zero_local(configured_ssid, sizeof(configured_ssid));
         ESP_LOGE(TAG, "esp_wifi_set_storage: %s", esp_err_to_name(err));
         return err;
     }
     err = esp_wifi_set_mode(WIFI_MODE_STA);
     if (err != ESP_OK) {
+        secure_zero_local(configured_password, sizeof(configured_password));
+        secure_zero_local(configured_ssid, sizeof(configured_ssid));
         ESP_LOGE(TAG, "esp_wifi_set_mode: %s", esp_err_to_name(err));
         return err;
     }
@@ -119,6 +173,8 @@ esp_err_t wifi_app_start(void *tab5_comp)
     country.policy = WIFI_COUNTRY_POLICY_AUTO;
     err = esp_wifi_set_country(&country);
     if (err != ESP_OK) {
+        secure_zero_local(configured_password, sizeof(configured_password));
+        secure_zero_local(configured_ssid, sizeof(configured_ssid));
         ESP_LOGE(TAG, "esp_wifi_set_country: %s", esp_err_to_name(err));
         return err;
     }
@@ -127,15 +183,13 @@ esp_err_t wifi_app_start(void *tab5_comp)
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, nullptr);
 
     wifi_config_t wifi_config = {};
-    snprintf((char *)wifi_config.sta.ssid, sizeof(wifi_config.sta.ssid), "%s",
-             credential_wifi_ssid());
-    snprintf((char *)wifi_config.sta.password, sizeof(wifi_config.sta.password), "%s",
-             credential_wifi_password());
-    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-    if (wifi_config.sta.password[0] == '\0') {
-        ESP_LOGW(TAG, "wifi password not set in NVS; run 'cred set wifi_pass <password>'");
-    }
+    memcpy(wifi_config.sta.ssid, configured_ssid, ssid_len);
+    memcpy(wifi_config.sta.password, configured_password, password_len);
+    secure_zero_local(configured_password, sizeof(configured_password));
+    secure_zero_local(configured_ssid, sizeof(configured_ssid));
+    wifi_config.sta.threshold.authmode = password_len == 0 ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
     err = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    secure_zero_local(&wifi_config, sizeof(wifi_config));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_set_config: %s", esp_err_to_name(err));
         return err;
@@ -146,6 +200,7 @@ esp_err_t wifi_app_start(void *tab5_comp)
         ESP_LOGE(TAG, "esp_wifi_start: %s", esp_err_to_name(err));
         return err;
     }
+    s_wifi_started = true;
     ESP_LOGI(TAG, "ESP-Hosted init done, STA start");
     return ESP_OK;
 }
@@ -170,6 +225,10 @@ esp_err_t wifi_app_wait_connected(uint32_t timeout_ms)
 
 esp_err_t wifi_app_reconnect(void)
 {
+    if (!s_wifi_started) {
+        ESP_LOGW(TAG, "reconnect ignored: Wi-Fi is disabled or failed to start");
+        return ESP_ERR_INVALID_STATE;
+    }
     esp_err_t err = esp_wifi_disconnect();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "disconnect: %s", esp_err_to_name(err));

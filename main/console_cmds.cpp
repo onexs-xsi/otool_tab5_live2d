@@ -76,7 +76,7 @@ static int do_llm_ask(int argc, char **argv)
         }
         question[pos] = '\0';
         llm_app_ask_text(question);
-        printf("llm: asking: %s\n", question);
+        printf("llm: run queued (%u bytes)\n", (unsigned)strlen(question));
         return 0;
     }
 
@@ -149,7 +149,7 @@ static int do_stack(int argc, char **argv)
     return 0;
 }
 
-/* ---------------- cred（运行时凭证，NVS） ---------------- */
+/* ---------------- cred（有效凭证；sdkconfig 优先，NVS 后备） ---------------- */
 
 static const char *cred_valid_names[] = { "wifi_ssid", "wifi_pass", "llm_key" };
 
@@ -170,18 +170,14 @@ static void cred_print_masked(const char *name, const char *value)
         printf("  %s = <empty>\n", name);
         return;
     }
-    if (strcmp(name, "wifi_ssid") == 0 || len <= 4) {
-        printf("  %s = %s\n", name, value);
-        return;
-    }
-    /* 秘密值脱敏：只显示前 4 字符与长度 */
-    printf("  %s = %.*s*** (%u chars)\n", name, 4, value, (unsigned)len);
+    /* SSID/密码/Key 均不显示任何前缀，短值也不能原样泄漏。 */
+    printf("  %s = <set> (%u chars)\n", name, (unsigned)len);
 }
 
 static int do_cred_set(int argc, char **argv)
 {
     if (argc < 3) {
-        printf("usage: cred set <name> <value>   (names: wifi_ssid|wifi_pass|llm_key)\n");
+        printf("usage: cred-set <name> <value>   (names: wifi_ssid|wifi_pass|llm_key)\n");
         return 1;
     }
     if (!cred_name_valid(argv[1])) {
@@ -193,7 +189,8 @@ static int do_cred_set(int argc, char **argv)
         printf("cred: set failed: %s\n", esp_err_to_name(err));
         return 1;
     }
-    printf("cred: %s saved to NVS\n", argv[1]);
+    printf("cred: %s saved to NVS fallback; a non-empty sdkconfig value still takes precedence\n",
+           argv[1]);
     return 0;
 }
 
@@ -203,10 +200,14 @@ static int do_cred_show(int argc, char **argv)
     (void)argv;
     for (size_t i = 0; i < sizeof(cred_valid_names) / sizeof(cred_valid_names[0]); i++) {
         char buf[256];
-        if (credential_store_get(cred_valid_names[i], buf, sizeof(buf)) == ESP_OK) {
+        if (credential_store_copy_runtime(cred_valid_names[i], buf, sizeof(buf)) == ESP_OK) {
             cred_print_masked(cred_valid_names[i], buf);
         } else {
             printf("  %s = <unset>\n", cred_valid_names[i]);
+        }
+        volatile char *p = buf;
+        for (size_t j = 0; j < sizeof(buf); j++) {
+            p[j] = '\0';
         }
     }
     return 0;
@@ -215,7 +216,7 @@ static int do_cred_show(int argc, char **argv)
 static int do_cred_clear(int argc, char **argv)
 {
     if (argc < 2 || !cred_name_valid(argv[1])) {
-        printf("usage: cred clear <name>   (names: wifi_ssid|wifi_pass|llm_key)\n");
+        printf("usage: cred-clear <name>   (names: wifi_ssid|wifi_pass|llm_key)\n");
         return 1;
     }
     esp_err_t err = credential_store_erase(argv[1]);
@@ -223,7 +224,7 @@ static int do_cred_clear(int argc, char **argv)
         printf("cred: clear failed: %s\n", esp_err_to_name(err));
         return 1;
     }
-    printf("cred: %s erased\n", argv[1]);
+    printf("cred: %s erased from NVS fallback; sdkconfig value is unchanged\n", argv[1]);
     return 0;
 }
 
@@ -250,7 +251,7 @@ static int do_agent_run(int argc, char **argv)
     }
     question[pos] = '\0';
     agent_app_ask(question);
-    printf("agent: run queued: %s\n", question);
+    printf("agent: run queued (%u bytes)\n", (unsigned)strlen(question));
     return 0;
 }
 
@@ -270,6 +271,15 @@ static int do_agent_status(int argc, char **argv)
     char buf[192];
     agent_app_status(buf, sizeof(buf));
     printf("agent: %s\n", buf);
+    return 0;
+}
+
+static int do_agent_reset(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    agent_app_reset_session();
+    printf("agent: conversation reset queued\n");
     return 0;
 }
 
@@ -351,17 +361,17 @@ static void register_commands(void)
     esp_console_cmd_register(&cmd);
 
     cmd.command = "cred";
-    cmd.help = "show runtime credentials (masked)";
+    cmd.help = "show effective credentials, sdkconfig first (masked)";
     cmd.func = &do_cred_show;
     esp_console_cmd_register(&cmd);
 
     cmd.command = "cred-set";
-    cmd.help = "store a credential to NVS: cred-set <wifi_ssid|wifi_pass|llm_key> <value>";
+    cmd.help = "store optional NVS fallback: cred-set <wifi_ssid|wifi_pass|llm_key> <value>";
     cmd.func = &do_cred_set;
     esp_console_cmd_register(&cmd);
 
     cmd.command = "cred-clear";
-    cmd.help = "erase a credential: cred-clear <wifi_ssid|wifi_pass|llm_key>";
+    cmd.help = "erase an NVS fallback: cred-clear <wifi_ssid|wifi_pass|llm_key>";
     cmd.func = &do_cred_clear;
     esp_console_cmd_register(&cmd);
 
@@ -378,6 +388,11 @@ static void register_commands(void)
     cmd.command = "agent-status";
     cmd.help = "agent worker status";
     cmd.func = &do_agent_status;
+    esp_console_cmd_register(&cmd);
+
+    cmd.command = "agent-reset";
+    cmd.help = "cancel the active run and clear agent conversation state";
+    cmd.func = &do_agent_reset;
     esp_console_cmd_register(&cmd);
 
     cmd.command = "agent-protocol";

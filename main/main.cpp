@@ -1,5 +1,5 @@
 // otool_tab5_live2d：Tab5 最小演示 → 联网（C6 Wi-Fi）+ 豆包 LLM 流式对话。
-// 初始化流程：NVS → M5Autodetect → 硬件 → LVGL → llm_app（ESP-Hosted + LLM worker + UI）。
+// 初始化流程：NVS → M5Autodetect → 硬件 → LVGL → 可选网络/LLM → UI/console。
 
 #include "M5Autodetect.h"
 #include "otool_tab5_component.h"
@@ -73,17 +73,21 @@ extern "C" void app_main(void)
     err = g_comp.lvgl_init();
     ESP_ERROR_CHECK(err);
 
-    // 运行时凭证（NVS；Wi-Fi 密码与 LLM Key 不编译进固件）
+    // 有效凭证：本地 sdkconfig 优先，NVS 仅作配置为空时的可选后备。
     ESP_ERROR_CHECK(credential_store_init());
 
-    // 联网（C6 Wi-Fi，独立模块 wifi_app）
-    ESP_ERROR_CHECK(wifi_app_start(&g_comp));
+    // 联网失败（包括未配置 SSID）进入离线模式，不能阻止 UI/console 启动。
+    err = wifi_app_start(&g_comp);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Wi-Fi unavailable (%s); continuing in offline mode",
+                 esp_err_to_name(err));
+    }
 
     // LLM 对话 worker（独立模块 llm_app）
     llm_app_start();
 
     // LLM 状态界面（独立模块 ui_app）
-    ui_app_start();
+    ui_app_start(&g_comp);
 
     // Agent（工具调用）worker（独立模块 agent_app）
     agent_app_start();

@@ -173,6 +173,8 @@ typedef otool_llm_event_action_t (*otool_llm_text_event_cb_t)(const otool_llm_te
  *      - ESP_OK on success
  *      - ESP_ERR_INVALID_ARG invalid arguments (missing model, bad struct_size)
  *      - OTOOL_LLM_ERR_UNSUPPORTED request uses a field the selected protocol does not support
+ *      - OTOOL_LLM_ERR_REQUEST_TOO_LARGE configured message/string budget exceeded
+ *      - OTOOL_LLM_ERR_TOOL_SCHEMA invalid or over-budget tool definition
  *      - ESP_ERR_NO_MEM out of memory
  */
 esp_err_t otool_llm_request_create(otool_llm_client_handle_t client,

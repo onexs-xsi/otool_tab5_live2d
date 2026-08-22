@@ -32,7 +32,26 @@ static bool copy_string_field(cJSON *obj, const char *key, char *out, size_t out
     if (!cJSON_IsString(item) || item->valuestring == NULL) {
         return false;
     }
-    snprintf(out, out_size, "%s", item->valuestring);
+    size_t len = strlen(item->valuestring);
+    if (len >= out_size) {
+        out[0] = '\0';
+        return false;
+    }
+    memcpy(out, item->valuestring, len + 1);
+    return true;
+}
+
+static bool parse_output_index(cJSON *root, uint32_t *out)
+{
+    cJSON *item = get_child(root, "output_index");
+    if (!cJSON_IsNumber(item) || item->valuedouble < 0 || item->valuedouble > UINT32_MAX) {
+        return false;
+    }
+    uint32_t value = (uint32_t)item->valuedouble;
+    if ((double)value != item->valuedouble) {
+        return false;
+    }
+    *out = value;
     return true;
 }
 
@@ -214,8 +233,17 @@ static esp_err_t responses_on_sse_event(otool_llm_exec_ctx_t *ctx,
 
     if (strcmp(type, "response.created") == 0) {
         cJSON *resp = get_child(root, "response");
-        copy_string_field(resp, "id", ctx->response_id, sizeof(ctx->response_id));
-        copy_string_field(resp, "model", ctx->model, sizeof(ctx->model));
+        if (!copy_string_field(resp, "id", ctx->response_id, sizeof(ctx->response_id))) {
+            err = otool_llm_exec_report_error(ctx, OTOOL_LLM_ERR_PROTOCOL,
+                                              "response id missing or over budget", NULL);
+            goto out;
+        }
+        if (get_child(resp, "model") != NULL &&
+            !copy_string_field(resp, "model", ctx->model, sizeof(ctx->model))) {
+            err = otool_llm_exec_report_error(ctx, OTOOL_LLM_ERR_PROTOCOL,
+                                              "response model is invalid or over budget", NULL);
+            goto out;
+        }
         if (!ctx->proto.responses.started) {
             ctx->proto.responses.started = true;
             otool_llm_text_event_t evt = { .type = OTOOL_LLM_TEXT_EVENT_RESPONSE_STARTED };
@@ -244,13 +272,12 @@ static esp_err_t responses_on_sse_event(otool_llm_exec_ctx_t *ctx,
         if (cJSON_IsString(itype) && itype->valuestring != NULL &&
             strcmp(itype->valuestring, "function_call") == 0) {
             /* 新 function_call item：按 output_index 分配槽位（WP2） */
-            cJSON *oi = get_child(root, "output_index");
-            if (!cJSON_IsNumber(oi)) {
+            uint32_t index = 0;
+            if (!parse_output_index(root, &index)) {
                 err = otool_llm_exec_report_error(ctx, OTOOL_LLM_ERR_JSON,
-                                                  "output_item.added missing output_index", NULL);
+                                                  "output_item.added has invalid output_index", NULL);
                 goto out;
             }
-            uint32_t index = (uint32_t)oi->valuedouble;
             otool_llm_responses_state_t *st = &ctx->proto.responses;
             otool_llm_pending_tool_call_t *slot = NULL;
             for (int i = 0; i < CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS; i++) {
@@ -271,9 +298,14 @@ static esp_err_t responses_on_sse_event(otool_llm_exec_ctx_t *ctx,
             memset(slot, 0, sizeof(*slot));
             slot->active = true;
             slot->output_index = index;
-            copy_string_field(item, "id", slot->item_id, sizeof(slot->item_id));
-            copy_string_field(item, "call_id", slot->call_id, sizeof(slot->call_id));
-            copy_string_field(item, "name", slot->name, sizeof(slot->name));
+            if ((get_child(item, "id") != NULL &&
+                 !copy_string_field(item, "id", slot->item_id, sizeof(slot->item_id))) ||
+                !copy_string_field(item, "call_id", slot->call_id, sizeof(slot->call_id)) ||
+                !copy_string_field(item, "name", slot->name, sizeof(slot->name))) {
+                err = otool_llm_exec_report_error(ctx, OTOOL_LLM_ERR_PROTOCOL,
+                                                  "tool identity missing or over budget", NULL);
+                goto out;
+            }
             otool_llm_text_event_t evt = { .type = OTOOL_LLM_TEXT_EVENT_TOOL_CALL_STARTED };
             evt.data.tool_call_started.output_index = index;
             evt.data.tool_call_started.item_id = slot->item_id[0] ? slot->item_id : NULL;
@@ -283,11 +315,11 @@ static esp_err_t responses_on_sse_event(otool_llm_exec_ctx_t *ctx,
         }
         /* reasoning/message item: 忽略（文本由 output_text.delta 事件承载） */
     } else if (strcmp(type, "response.function_call_arguments.delta") == 0) {
-        cJSON *oi = get_child(root, "output_index");
         cJSON *delta = get_child(root, "delta");
-        if (!cJSON_IsNumber(oi)) {
+        uint32_t index = 0;
+        if (!parse_output_index(root, &index)) {
             err = otool_llm_exec_report_error(ctx, OTOOL_LLM_ERR_JSON,
-                                              "function_call_arguments.delta missing output_index", NULL);
+                                              "function_call_arguments.delta has invalid output_index", NULL);
             goto out;
         }
         if (!cJSON_IsString(delta) || delta->valuestring == NULL) {
@@ -295,7 +327,6 @@ static esp_err_t responses_on_sse_event(otool_llm_exec_ctx_t *ctx,
                                               "function_call_arguments.delta missing string delta", NULL);
             goto out;
         }
-        uint32_t index = (uint32_t)oi->valuedouble;
         otool_llm_responses_state_t *st = &ctx->proto.responses;
         otool_llm_pending_tool_call_t *slot = NULL;
         for (int i = 0; i < CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS; i++) {
@@ -325,11 +356,11 @@ static esp_err_t responses_on_sse_event(otool_llm_exec_ctx_t *ctx,
         evt.data.tool_arguments_delta.delta_len = dlen;
         ctx->emit(ctx, &evt);
     } else if (strcmp(type, "response.function_call_arguments.done") == 0) {
-        cJSON *oi = get_child(root, "output_index");
         cJSON *args = get_child(root, "arguments");
-        if (!cJSON_IsNumber(oi)) {
+        uint32_t index = 0;
+        if (!parse_output_index(root, &index)) {
             err = otool_llm_exec_report_error(ctx, OTOOL_LLM_ERR_JSON,
-                                              "function_call_arguments.done missing output_index", NULL);
+                                              "function_call_arguments.done has invalid output_index", NULL);
             goto out;
         }
         if (!cJSON_IsString(args) || args->valuestring == NULL) {
@@ -337,7 +368,6 @@ static esp_err_t responses_on_sse_event(otool_llm_exec_ctx_t *ctx,
                                               "function_call_arguments.done missing arguments", NULL);
             goto out;
         }
-        uint32_t index = (uint32_t)oi->valuedouble;
         otool_llm_responses_state_t *st = &ctx->proto.responses;
         otool_llm_pending_tool_call_t *slot = NULL;
         for (int i = 0; i < CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS; i++) {
@@ -372,8 +402,12 @@ static esp_err_t responses_on_sse_event(otool_llm_exec_ctx_t *ctx,
         cJSON *itype = get_child(item, "type");
         if (cJSON_IsString(itype) && itype->valuestring != NULL &&
             strcmp(itype->valuestring, "function_call") == 0) {
-            cJSON *oi = get_child(root, "output_index");
-            uint32_t index = cJSON_IsNumber(oi) ? (uint32_t)oi->valuedouble : 0;
+            uint32_t index = 0;
+            if (!parse_output_index(root, &index)) {
+                err = otool_llm_exec_report_error(ctx, OTOOL_LLM_ERR_JSON,
+                                                  "output_item.done has invalid output_index", NULL);
+                goto out;
+            }
             otool_llm_responses_state_t *st = &ctx->proto.responses;
             for (int i = 0; i < CONFIG_OTOOL_LLM_MAX_PENDING_TOOL_CALLS; i++) {
                 otool_llm_pending_tool_call_t *slot = &st->tool_calls[i];
@@ -385,20 +419,32 @@ static esp_err_t responses_on_sse_event(otool_llm_exec_ctx_t *ctx,
                     cJSON *args = get_child(item, "arguments");
                     if (cJSON_IsString(args) && args->valuestring != NULL) {
                         size_t alen = strlen(args->valuestring);
-                        if (alen < sizeof(slot->arguments)) {
-                            memcpy(slot->arguments, args->valuestring, alen + 1);
-                            slot->arguments_len = alen;
-                            slot->arguments_done = true;
-                            otool_llm_text_event_t evt = {
-                                .type = OTOOL_LLM_TEXT_EVENT_TOOL_CALL_DONE
-                            };
-                            evt.data.tool_call_done.output_index = index;
-                            evt.data.tool_call_done.call_id = slot->call_id[0] ? slot->call_id : NULL;
-                            evt.data.tool_call_done.name = slot->name[0] ? slot->name : NULL;
-                            evt.data.tool_call_done.arguments = slot->arguments;
-                            evt.data.tool_call_done.arguments_len = slot->arguments_len;
-                            ctx->emit(ctx, &evt);
+                        if (alen >= sizeof(slot->arguments)) {
+                            err = otool_llm_exec_report_error(ctx,
+                                                              OTOOL_LLM_ERR_TOOL_ARGUMENTS,
+                                                              "tool arguments over budget", NULL);
+                            goto out;
                         }
+                        if (slot->arguments_len > 0 &&
+                            (alen != slot->arguments_len ||
+                             memcmp(args->valuestring, slot->arguments, alen) != 0)) {
+                            err = otool_llm_exec_report_error(
+                                ctx, OTOOL_LLM_ERR_PROTOCOL,
+                                "item arguments mismatch accumulated deltas", NULL);
+                            goto out;
+                        }
+                        memcpy(slot->arguments, args->valuestring, alen + 1);
+                        slot->arguments_len = alen;
+                        slot->arguments_done = true;
+                        otool_llm_text_event_t evt = {
+                            .type = OTOOL_LLM_TEXT_EVENT_TOOL_CALL_DONE
+                        };
+                        evt.data.tool_call_done.output_index = index;
+                        evt.data.tool_call_done.call_id = slot->call_id[0] ? slot->call_id : NULL;
+                        evt.data.tool_call_done.name = slot->name[0] ? slot->name : NULL;
+                        evt.data.tool_call_done.arguments = slot->arguments;
+                        evt.data.tool_call_done.arguments_len = slot->arguments_len;
+                        ctx->emit(ctx, &evt);
                     } else {
                         err = otool_llm_exec_report_error(ctx, OTOOL_LLM_ERR_PROTOCOL,
                                                           "tool call item done without arguments", NULL);

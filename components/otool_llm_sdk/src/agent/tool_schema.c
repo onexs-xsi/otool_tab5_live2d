@@ -18,6 +18,7 @@
 
 #include "cJSON.h"
 
+#include <ctype.h>
 #include <string.h>
 
 #define OTOOL_TOOL_SCHEMA_MAX_DEPTH 3
@@ -45,7 +46,39 @@ static bool schema_has_unsupported_keywords(cJSON *node)
     return false;
 }
 
-static bool validate_schema_node(cJSON *node, int depth)
+static int required_name_count(cJSON *required, const char *property_name)
+{
+    int found = 0;
+    int count = cJSON_GetArraySize(required);
+    for (int i = 0; i < count; i++) {
+        cJSON *name = cJSON_GetArrayItem(required, i);
+        if (cJSON_IsString(name) && name->valuestring != NULL &&
+            strcmp(name->valuestring, property_name) == 0) {
+            found++;
+        }
+    }
+    return found;
+}
+
+static cJSON *parse_exact(const char *json, size_t len)
+{
+    const char *end = NULL;
+    cJSON *root = cJSON_ParseWithLengthOpts(json, len, &end, false);
+    if (root == NULL || end == NULL || end > json + len) {
+        cJSON_Delete(root);
+        return NULL;
+    }
+    while (end < json + len && isspace((unsigned char)*end)) {
+        end++;
+    }
+    if (end != json + len) {
+        cJSON_Delete(root);
+        return NULL;
+    }
+    return root;
+}
+
+static bool validate_schema_node(cJSON *node, int depth, bool strict)
 {
     if (node == NULL || !cJSON_IsObject(node) || depth > OTOOL_TOOL_SCHEMA_MAX_DEPTH) {
         return false;
@@ -69,8 +102,11 @@ static bool validate_schema_node(cJSON *node, int depth)
             return false;
         }
         cJSON *ap = cJSON_GetObjectItemCaseSensitive(node, "additionalProperties");
-        if (cJSON_IsBool(ap) && ap->valueint != 0) {
+        if ((ap != NULL && !cJSON_IsBool(ap)) || (cJSON_IsBool(ap) && ap->valueint != 0)) {
             return false; /* additionalProperties: true 不支持 */
+        }
+        if (strict && (ap == NULL || !cJSON_IsFalse(ap))) {
+            return false;
         }
         cJSON *req = cJSON_GetObjectItemCaseSensitive(node, "required");
         if (req != NULL) {
@@ -88,14 +124,23 @@ static bool validate_schema_node(cJSON *node, int depth)
                     cJSON_GetObjectItemCaseSensitive(props, name->valuestring) == NULL) {
                     return false;
                 }
+                if (required_name_count(req, name->valuestring) != 1) {
+                    return false;
+                }
             }
+        }
+        if (strict && (props == NULL || req == NULL ||
+                       cJSON_GetArraySize(props) != cJSON_GetArraySize(req))) {
+            return false;
         }
         /* 每个属性 */
         if (props != NULL) {
             int n = cJSON_GetArraySize(props);
             for (int i = 0; i < n; i++) {
                 cJSON *item = cJSON_GetArrayItem(props, i);
-                if (!validate_schema_node(item, depth + 1)) {
+                if (item == NULL || item->string == NULL ||
+                    (strict && required_name_count(req, item->string) != 1) ||
+                    !validate_schema_node(item, depth + 1, strict)) {
                     return false;
                 }
             }
@@ -114,16 +159,16 @@ static bool validate_schema_node(cJSON *node, int depth)
     return true;
 }
 
-esp_err_t otool_llm_tool_schema_validate(const char *schema_json, size_t schema_len)
+esp_err_t otool_llm_tool_schema_validate(const char *schema_json, size_t schema_len, bool strict)
 {
     if (schema_json == NULL || schema_len == 0) {
         return OTOOL_LLM_ERR_TOOL_SCHEMA;
     }
-    cJSON *root = cJSON_ParseWithLength(schema_json, schema_len);
+    cJSON *root = parse_exact(schema_json, schema_len);
     if (root == NULL) {
         return OTOOL_LLM_ERR_TOOL_SCHEMA;
     }
-    bool ok = validate_schema_node(root, 0);
+    bool ok = validate_schema_node(root, 0, strict);
     cJSON_Delete(root);
     return ok ? ESP_OK : OTOOL_LLM_ERR_TOOL_SCHEMA;
 }
@@ -169,11 +214,11 @@ esp_err_t otool_llm_tool_schema_check_arguments(const char *schema_json, size_t 
     if (schema_json == NULL || arguments_json == NULL || args_len == 0) {
         return OTOOL_LLM_ERR_TOOL_ARGUMENTS;
     }
-    cJSON *schema = cJSON_ParseWithLength(schema_json, schema_len);
+    cJSON *schema = parse_exact(schema_json, schema_len);
     if (schema == NULL) {
         return OTOOL_LLM_ERR_TOOL_SCHEMA;
     }
-    cJSON *args = cJSON_ParseWithLength(arguments_json, args_len);
+    cJSON *args = parse_exact(arguments_json, args_len);
     if (args == NULL || !cJSON_IsObject(args)) {
         cJSON_Delete(schema);
         cJSON_Delete(args);

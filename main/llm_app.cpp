@@ -21,6 +21,14 @@
 
 static const char *TAG = "llm_app";
 
+static void secure_zero_local(void *value, size_t length)
+{
+    volatile unsigned char *p = static_cast<volatile unsigned char *>(value);
+    while (length-- > 0) {
+        *p++ = 0;
+    }
+}
+
 /* 触摸/命令触发与打断 */
 static SemaphoreHandle_t s_trigger_sem = nullptr;   /* 触发 → 立即提问/打断 */
 static SemaphoreHandle_t s_request_lock = nullptr;  /* 保护 s_active_request / s_pending_question */
@@ -221,16 +229,31 @@ static void llm_worker_task(void *arg)
 {
     (void)arg;
 
+    /* Fail closed before waiting for the network: an empty local sdkconfig
+     * value is a supported disabled state, not a reason to abort or wait forever. */
+    char api_key[256] = { 0 };
+    esp_err_t credential_err =
+        credential_store_copy_runtime("llm_key", api_key, sizeof(api_key));
+    if (credential_err != ESP_OK || api_key[0] == '\0') {
+        secure_zero_local(api_key, sizeof(api_key));
+        reply_set_error("LLM disabled: CONFIG_OTOOL_LLM_API_KEY is empty");
+        ESP_LOGW(TAG, "LLM disabled: set CONFIG_OTOOL_LLM_API_KEY in sdkconfig and rebuild");
+        vTaskDelete(nullptr);
+        return;
+    }
+    secure_zero_local(api_key, sizeof(api_key));
+
     /* 等待 Wi-Fi 就绪（由 wifi_app 管理连接状态）。链路问题（SDIO/供电）时
      * 循环等待，恢复后 LLM 自动可用——不能超时退出。 */
     while (wifi_app_wait_connected(30000) != ESP_OK) {
         ESP_LOGW(TAG, "wifi not connected yet, llm worker waiting...");
     }
 
-    /* 运行时凭证（NVS，console 'cred set llm_key <key>'） */
-    const char *api_key = credential_llm_key();
-    if (api_key == nullptr || api_key[0] == '\0') {
-        ESP_LOGE(TAG, "llm api key not set; run 'cred set llm_key <key>' then reboot");
+    credential_err = credential_store_copy_runtime("llm_key", api_key, sizeof(api_key));
+    if (credential_err != ESP_OK || api_key[0] == '\0') {
+        secure_zero_local(api_key, sizeof(api_key));
+        reply_set_error("LLM disabled: API key became unavailable");
+        ESP_LOGW(TAG, "LLM disabled: effective API key became unavailable");
         vTaskDelete(nullptr);
         return;
     }
@@ -245,6 +268,7 @@ static void llm_worker_task(void *arg)
 
     otool_llm_client_handle_t client = nullptr;
     esp_err_t err = otool_llm_client_create(&cfg, &client);
+    secure_zero_local(api_key, sizeof(api_key));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "client create failed: %s", esp_err_to_name(err));
         vTaskDelete(nullptr);
@@ -321,8 +345,10 @@ static void llm_worker_task(void *arg)
             xSemaphoreGive(s_request_lock);
         }
 
-        ESP_LOGI(TAG, "round %d: ask '%s'", round, question);
-        printf("[llm] round %d ask: %s\n", round, question);
+        ESP_LOGI(TAG, "round %d: question_bytes=%u", round,
+                 (unsigned)strlen(question));
+        printf("[llm] round %d: question_bytes=%u\n", round,
+               (unsigned)strlen(question));
         fflush(stdout);
         err = otool_llm_request_execute_stream(request, llm_on_event, nullptr);
         ESP_LOGI(TAG, "round %d done: %s, reply_len=%u", round, esp_err_to_name(err),

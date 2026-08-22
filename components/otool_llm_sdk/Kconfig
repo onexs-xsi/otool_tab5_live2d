@@ -8,6 +8,32 @@ config OTOOL_LLM_MAX_REQUEST_BYTES
         Hard cap for the request body built by cJSON. Exceeding it returns
         OTOOL_LLM_ERR_REQUEST_TOO_LARGE; there is no silent truncation.
 
+config OTOOL_LLM_MAX_REQUEST_MESSAGES
+    int "Maximum messages accepted by one text request"
+    default 32
+    range 1 256
+    help
+        Bounds the message array allocated by request_create(). Agent-managed
+        Chat transcripts have the separate, usually smaller Agent limit below.
+
+config OTOOL_LLM_MAX_BASE_URL_BYTES
+    int "Maximum provider base URL size (bytes)"
+    default 512
+    range 64 2048
+
+config OTOOL_LLM_MAX_ENDPOINT_PATH_BYTES
+    int "Maximum provider endpoint path size (bytes)"
+    default 256
+    range 16 1024
+
+config OTOOL_LLM_MAX_API_KEY_BYTES
+    int "Maximum runtime API key size (bytes)"
+    default 896
+    range 64 1000
+    help
+        Keeps the complete Bearer authorization value within the SDK's bounded
+        header buffer. The key must still be injected at runtime.
+
 config OTOOL_LLM_MAX_SSE_EVENT_BYTES
     int "Maximum merged SSE event data size (bytes)"
     default 16384
@@ -63,6 +89,21 @@ config OTOOL_LLM_MAX_TOOLS
     help
         Upper bound of tool definitions accepted per request (and per registry later).
 
+config OTOOL_LLM_MAX_TOOL_NAME_BYTES
+    int "Maximum tool name size (bytes)"
+    default 64
+    range 16 64
+    help
+        Maximum bytes before the trailing NUL. Names are limited to ASCII
+        letters, digits and underscore.
+
+config OTOOL_LLM_MAX_TOOL_DESCRIPTION_BYTES
+    int "Maximum tool description size (bytes)"
+    default 512
+    range 64 2048
+    help
+        Registration rejects longer model-facing descriptions.
+
 config OTOOL_LLM_MAX_PENDING_TOOL_CALLS
     int "Maximum pending tool calls per turn"
     default 2
@@ -83,5 +124,54 @@ config OTOOL_LLM_MAX_TOOL_OUTPUT_BYTES
     range 512 32768
     help
         Hard cap for one tool result returned to the model.
+
+config OTOOL_LLM_MAX_TOOL_SCHEMA_BYTES
+    int "Maximum JSON schema size per tool (bytes)"
+    default 2048
+    range 256 16384
+    help
+        Registration rejects a tool whose parameter schema exceeds this cap.
+
+config OTOOL_LLM_MAX_TOTAL_TOOL_SCHEMA_BYTES
+    int "Maximum aggregate tool schema size (bytes)"
+    default 8192
+    range 1024 65536
+    help
+        Aggregate schema byte budget for one sealed registry.
+
+config OTOOL_LLM_MAX_AGENT_TURNS
+    int "Default maximum model turns per agent run"
+    default 6
+    range 1 32
+
+config OTOOL_LLM_MAX_AGENT_TOOL_CALLS
+    int "Default maximum tool calls per agent run"
+    default 8
+    range 1 64
+
+config OTOOL_LLM_MAX_AGENT_MESSAGES
+    int "Maximum messages in a local Chat transcript"
+    default 24
+    range 4 128
+    help
+        The Chat state mode returns OTOOL_LLM_ERR_CONTEXT_FULL instead of
+        silently evicting messages when this count is exhausted.
+
+config OTOOL_LLM_MAX_AGENT_CONTEXT_BYTES
+    int "Maximum owned local transcript bytes"
+    default 32768
+    range 4096 262144
+    help
+        Includes message text, tool call ids/names/arguments and local metadata.
+
+config OTOOL_LLM_DEFAULT_AGENT_TIMEOUT_MS
+    int "Default whole-agent-run timeout (ms)"
+    default 120000
+    range 1000 600000
+
+config OTOOL_LLM_DEFAULT_TOOL_TIMEOUT_MS
+    int "Default cooperative tool timeout (ms)"
+    default 15000
+    range 100 300000
 
 endmenu

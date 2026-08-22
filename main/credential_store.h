@@ -8,10 +8,11 @@ extern "C" {
 #endif
 
 /**
- * @brief Runtime credential store (NVS-backed).
+ * @brief Effective application credential store.
  *
- * WP0: 仓库与固件默认配置不包含真实凭证；Wi-Fi 密码与 LLM API Key 通过
- * console `cred set` 写入 NVS，应用启动时经此模块读取。
+ * Local sdkconfig values have precedence. NVS is retained only as an optional
+ * fallback when the corresponding sdkconfig value is empty. Repository
+ * defaults remain empty and must never contain real credentials.
  *
  * Names: "wifi_ssid" / "wifi_pass" / "llm_key".
  */
@@ -37,14 +38,13 @@ esp_err_t credential_store_set(const char *name, const char *value);
  */
 esp_err_t credential_store_erase(const char *name);
 
-/* ---- helpers returning cached copies (safe to call anytime after init) ---- */
-
-/**< Wi-Fi SSID: NVS first, Kconfig default as fallback (not secret). */
-const char *credential_wifi_ssid(void);
-/**< Wi-Fi password: NVS only; "" when unset. */
-const char *credential_wifi_password(void);
-/**< LLM API key: NVS only; "" when unset. */
-const char *credential_llm_key(void);
+/**
+ * @brief Copy one cached runtime credential while holding the store mutex.
+ *
+ * Names are the same as credential_store_get(). A non-empty sdkconfig value
+ * wins over NVS; NVS is read only when that value is empty.
+ */
+esp_err_t credential_store_copy_runtime(const char *name, char *out, size_t cap);
 
 #ifdef __cplusplus
 }

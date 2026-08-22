@@ -20,7 +20,7 @@ extern "C" {
  * @brief Validate a parameters JSON Schema string against the supported subset.
  *        Called at registration time (plan §9: two-layer validation).
  */
-esp_err_t otool_llm_tool_schema_validate(const char *schema_json, size_t schema_len);
+esp_err_t otool_llm_tool_schema_validate(const char *schema_json, size_t schema_len, bool strict);
 
 /**
  * @brief Validate a model-provided arguments instance against the schema.

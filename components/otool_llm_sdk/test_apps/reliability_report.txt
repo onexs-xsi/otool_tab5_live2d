@@ -20,7 +20,8 @@ WP9 reliability smoke — 最终汇总（2026-08-22，COM3，Chat 协议，douba
                          -> SW_CPU_RESET；USB 供电 + SDIO 4-bit 40MHz 满配的环境问题）
 
 401 注入（--401-test）：
-  invalid key -> [agent] ERROR code=0x106（检测到 401 并终止）
+  修复前记录：invalid key -> [agent] ERROR code=0x106
+  当前复测：invalid key -> ERROR code=0x1d007（OTOOL_LLM_ERR_HTTP_STATUS）
   restore key + reset -> run ok（恢复验证通过）
 
 错误注入矩阵（transport_test，IDF test app + local_sse_server.py）：
@@ -42,7 +43,6 @@ WP9 reliability smoke — 最终汇总（2026-08-22，COM3，Chat 协议，douba
 
 剩余风险：
   - 连接阶段取消延迟 = connect_timeout（10s）；首 token 前取消 = 首 token 延迟（≤60s）
-  - 401 错误码映射为 0x106（ESP_ERR_UNSUPPORTED），语义待完善
   - Ark Chat 流无 usage 字段（include_usage 未生效），tokens 无法统计
   - SDIO 供电崩溃需稳定供电后复测
 

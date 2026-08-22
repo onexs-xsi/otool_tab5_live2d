@@ -1,8 +1,7 @@
-# The otool_llm_sdk component lives two levels above this test app.
-set(EXTRA_COMPONENT_DIRS ../../)
+cmake_minimum_required(VERSION 3.16)
 
-idf_component_register(
-    SRCS "main/main.c"
-    INCLUDE_DIRS "."
-    REQUIRES otool_llm_sdk
-)
+# The otool_llm_sdk component lives two levels above this test app.
+set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/../..")
+
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(otool_llm_sdk_transport_test)

@@ -18,14 +18,19 @@
 
 # Build artifacts and directories
 **/build/
+build-*/
+components/otool_llm_sdk/test_apps/transport_test/run_result.txt
 build/
 *.o
 *.a
 *.out
-*.exe # For any host-side utilities compiled on Windows
+*.exe
 
 # ESP-IDF specific build outputs
 *.bin
+# Runtime assets embedded by main/CMakeLists.txt are source artifacts, not build outputs.
+!main/assets/agent_state_*_argb8888.bin
+!main/fonts/noto_cn_fonts/noto_zh_mid_24.bin
 *.elf
 *.map
 flasher_args.json # Generated in build directory
@@ -68,6 +73,11 @@ compile_commands.json
 
 # Third-party SDKs (Live2D Cubism SDK 鈥?licensed binaries, not for the repo)
 third_party/
+!components/otool_llm_sdk/test_apps/parser_and_adapters/third_party/
+!components/otool_llm_sdk/test_apps/parser_and_adapters/third_party/cjson/
+!components/otool_llm_sdk/test_apps/parser_and_adapters/third_party/cjson/cJSON.c
+!components/otool_llm_sdk/test_apps/parser_and_adapters/third_party/cjson/cJSON.h
+!components/otool_llm_sdk/test_apps/parser_and_adapters/third_party/cjson/LICENSE
 
 # Windows specific
 Thumbs.db
