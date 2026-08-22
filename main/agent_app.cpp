@@ -18,6 +18,7 @@
 #include "nvs.h"
 #include "sdkconfig.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 
@@ -54,6 +55,9 @@ static size_t s_reply_len = 0;
 static char s_last_error[192] = { 0 };
 static volatile bool s_busy = false;
 static volatile int s_round = 0;
+static volatile bool s_cancel_pending = false; /* agent-cancel 但 run 未开始（排队取消） */
+/* agent handle 跨 task 暴露：console 的 agent-cancel 直接中断进行中的 run */
+static std::atomic<otool_llm_agent_handle_t> s_agent{nullptr};
 
 /* ---------------- 设备工具（只读） ---------------- */
 
@@ -186,10 +190,10 @@ static void agent_worker_task(void *arg)
 {
     (void)arg;
 
-    if (wifi_app_wait_connected(30000) != ESP_OK) {
-        ESP_LOGE(TAG, "wifi not connected, agent disabled");
-        vTaskDelete(nullptr);
-        return;
+    /* wifi 可能因链路问题（SDIO/供电）暂时不可用：循环等待，恢复后 agent 自动可用。
+     * 注意：不能超时退出——否则之后所有 agent 命令无人处理。 */
+    while (wifi_app_wait_connected(30000) != ESP_OK) {
+        ESP_LOGW(TAG, "wifi not connected yet, agent worker waiting...");
     }
     const char *api_key = credential_llm_key();
     if (api_key == nullptr || api_key[0] == '\0') {
@@ -202,7 +206,7 @@ static void agent_worker_task(void *arg)
     cfg.struct_size = sizeof(cfg);
     cfg.provider = OTOOL_LLM_PROVIDER_VOLCENGINE_ARK;
     cfg.api_key = api_key;
-    cfg.connect_timeout_ms = 15000;
+    cfg.connect_timeout_ms = 10000;
     cfg.read_timeout_ms = 60000;
     const char *proto = agent_proto_get();
     if (strcmp(proto, "chat") == 0) {
@@ -263,6 +267,7 @@ static void agent_worker_task(void *arg)
         vTaskDelete(nullptr);
         return;
     }
+    s_agent.store(agent); /* console agent-cancel 可用 */
 
     char question[256] = { 0 };
     for (;;) {
@@ -273,6 +278,12 @@ static void agent_worker_task(void *arg)
             snprintf(question, sizeof(question), "%s", s_pending_question);
             s_pending_question[0] = '\0';
             xSemaphoreGive(s_reply_lock);
+        }
+
+        /* 排队取消：agent-cancel 在 run 开始前发出时，丢弃排队中的问题 */
+        if (s_cancel_pending) {
+            s_cancel_pending = false;
+            question[0] = '\0';
         }
 
         /* 若上一轮还在跑，先取消（agent-cancel 或新请求打断） */
@@ -321,9 +332,16 @@ extern "C" void agent_app_ask(const char *text)
 
 extern "C" void agent_app_cancel(void)
 {
-    /* 由 worker 中的 agent_cancel 处理：worker 每轮循环开始时取消旧 run */
+    /* 直接中断进行中的 run（otool_llm_agent_cancel 线程安全：置标志 +
+     * 关闭活动请求 socket → run_stream 在下一事件循环返回并 emit CANCELLED）；
+     * run 尚未开始时（worker 排队/等待 wifi），置 pending 由 worker 丢弃排队问题。 */
+    otool_llm_agent_handle_t h = s_agent.load();
+    if (h != nullptr) {
+        otool_llm_agent_cancel(h);
+    }
+    s_cancel_pending = true;
     if (s_trigger_sem != nullptr) {
-        xSemaphoreGive(s_trigger_sem); /* 空问题触发 → 取消路径 */
+        xSemaphoreGive(s_trigger_sem);
     }
 }
 

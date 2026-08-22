@@ -111,7 +111,14 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
 
     switch (evt->event_id) {
     case HTTP_EVENT_ON_CONNECTED:
-        /* Connect phase done: switch to the stream read timeout. */
+        /* Connect phase done: switch to the stream read timeout.
+         *
+         * 注意：连接期间用户已取消时不能在这里 close——perform 会继续
+         * request_send，对已 destroy 的 TLS transport 做 poll(FD=-1) 是未定义
+         * 行为（fd_set 栈越界写）。取消由三条路径保证：
+         *  - 连接中取消：connect_timeout 后 connect 失败 → executor 发 CANCELLED；
+         *  - 连接后取消：首个 SSE 事件回调返回 ACTION_CANCEL → ON_DATA 安全 abort；
+         *  - 首 token 前取消：read_timeout 读超时兜底 → CANCELLED。 */
         esp_http_client_set_timeout_ms(evt->client, c->cfg->read_timeout_ms);
         break;
 
@@ -236,6 +243,7 @@ esp_err_t otool_llm_transport_execute(const otool_llm_transport_config_t *cfg)
         if (c.abort_error != ESP_OK) {
             err = c.abort_error;
         } else if (cancelled) {
+            ESP_LOGD(TAG, "transport: cancelled, err=%s", esp_err_to_name(err));
             err = ESP_OK; /* executor turns this into the CANCELLED terminal event */
         } else if (err == ESP_OK) {
             int status = esp_http_client_get_status_code(client);

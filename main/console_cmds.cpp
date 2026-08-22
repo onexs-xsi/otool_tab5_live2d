@@ -134,6 +134,21 @@ static int do_version(int argc, char **argv)
     return 0;
 }
 
+static int do_stack(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    static const char *names[] = { "agent_worker", "llm_worker", "lvgl_task", "repl" };
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        TaskHandle_t t = xTaskGetHandle(names[i]);
+        if (t != nullptr) {
+            printf("stack %s: hwm=%lu bytes\n", names[i],
+                   (unsigned long)uxTaskGetStackHighWaterMark(t));
+        }
+    }
+    return 0;
+}
+
 /* ---------------- cred（运行时凭证，NVS） ---------------- */
 
 static const char *cred_valid_names[] = { "wifi_ssid", "wifi_pass", "llm_key" };
@@ -323,6 +338,11 @@ static void register_commands(void)
     cmd.command = "free";
     cmd.help = "show free heap";
     cmd.func = &do_free;
+    esp_console_cmd_register(&cmd);
+
+    cmd.command = "stack";
+    cmd.help = "task stack high-water marks";
+    cmd.func = &do_stack;
     esp_console_cmd_register(&cmd);
 
     cmd.command = "version";

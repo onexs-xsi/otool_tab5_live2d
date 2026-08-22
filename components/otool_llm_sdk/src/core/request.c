@@ -547,6 +547,9 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
     if (err != ESP_OK) {
         goto out_error_local;
     }
+    ESP_LOGI(TAG, "request body: %u bytes, tools=%u, messages=%u, outputs=%u",
+             (unsigned)body_len, (unsigned)view.tool_count, (unsigned)view.message_count,
+             (unsigned)view.tool_output_count);
 
     /* 2. Build the URL and the Authorization header. */
     const char *path = NULL;

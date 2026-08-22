@@ -1,0 +1,43 @@
+WP9 reliability smoke @ 2026-08-22 07:32:18 port=COM3
+runs=60 cancels=20 401_test=False
+== Phase A: 60 short agent runs ==
+  run 10: ok 5288ms  heap=26776828
+  run 20: ok 11580ms  heap=26776736
+  run 29: TIMEOUT (no done in 90s)
+  run 30: ok 8522ms  heap=26780420
+  run 40: ok 6619ms  heap=26776816
+  run 50: ok 4873ms  heap=26776372
+  run 56: TIMEOUT (no done in 90s)
+  run 60: ok 12799ms  heap=26777364
+  A result: ok=58 err=0 timeout=2 tool_calls=0 tokens_in=0 tokens_out=0
+  heap: first(run 10)=26776828 last(run 60)=26777364 net_delta=536 bytes
+== Phase B: 20 cancels ==
+  cancel 1: NO CANCELLED within 30s
+  cancel 2: run did not start
+  cancel 3: run did not start
+  cancel 4: NO CANCELLED within 30s
+  cancel 5: run did not start
+  cancel 6: run did not start
+  cancel 8: NO CANCELLED within 30s
+  cancel 9: run did not start
+  cancel 10: run did not start
+  cancel 11: NO CANCELLED within 30s
+  cancel 13: NO CANCELLED within 30s
+  cancel 15: NO CANCELLED within 30s
+  cancel 17: NO CANCELLED within 30s
+  cancel 19: NO CANCELLED within 30s
+  cancel 20: NO CANCELLED within 30s
+  B result: ok=5 late=0 fail=15 after_callback=0 cancel_ms P50=3 P95=4
+== Phase C: wifi disconnect/recover during run ==
+  reconnect cmd: wifi: reconnect -> ESP_OK
+  in-flight run during reconnect: ok 29950ms (survived)
+  C: recovery run ok
+== Summary ==
+  crashes (SDIO/power, device rebooted): 3
+  runs: ok=58 err=0 timeout=2
+  run duration ms: P50=8710 P95=15036 max=16746 n=58
+  first event ms: P50=9196 max=9196
+  tokens: in=0 out=0
+  cancels: ok=5 late=0 fail=15 after_callback=0
+  cancel latency ms: P50=3 P95=4
+  gates: A(runs)=False B(cancel)=False C(wifi)=True D(401)=True

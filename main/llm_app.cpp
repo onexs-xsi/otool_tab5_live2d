@@ -221,11 +221,10 @@ static void llm_worker_task(void *arg)
 {
     (void)arg;
 
-    /* 等待 Wi-Fi 就绪（最多 30s，由 wifi_app 管理连接状态） */
-    if (wifi_app_wait_connected(30000) != ESP_OK) {
-        ESP_LOGE(TAG, "wifi not connected within 30s, LLM disabled");
-        vTaskDelete(nullptr);
-        return;
+    /* 等待 Wi-Fi 就绪（由 wifi_app 管理连接状态）。链路问题（SDIO/供电）时
+     * 循环等待，恢复后 LLM 自动可用——不能超时退出。 */
+    while (wifi_app_wait_connected(30000) != ESP_OK) {
+        ESP_LOGW(TAG, "wifi not connected yet, llm worker waiting...");
     }
 
     /* 运行时凭证（NVS，console 'cred set llm_key <key>'） */
@@ -241,7 +240,7 @@ static void llm_worker_task(void *arg)
     cfg.provider = OTOOL_LLM_PROVIDER_VOLCENGINE_ARK;
     cfg.protocol = OTOOL_LLM_PROTOCOL_AUTO;
     cfg.api_key = api_key;
-    cfg.connect_timeout_ms = 15000;
+    cfg.connect_timeout_ms = 10000;
     cfg.read_timeout_ms = 60000;
 
     otool_llm_client_handle_t client = nullptr;
