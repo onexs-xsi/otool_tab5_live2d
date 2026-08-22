@@ -1073,3 +1073,17 @@ Gate 达成：host 测试一条命令有文档、有稳定结果（IDF test app 
 - OpenAI Responses 工具调用仍无凭证可测（外部依赖）。
 
 Gate 评估：无增长性泄漏 ✓、无 WDT ✓（SW_CPU_RESET 为 SDIO 主动复位）、无 UI 卡死 ✓、无取消后 callback ✓、无重复副作用执行 ✓（工具只读，cancel 后工具循环 break）。
+
+### 2026-08-22 — WP10（ADR 提交：语音扩展决策记录）
+
+提交 `docs/adr/ADR-002-voice-expansion.md`：
+
+- 决策：先做**半双工链路** MVP（ASR → 现有文本 Agent → TTS），完全复用
+  `otool_llm_text.h` 与已验证的 Agent runtime/工具/取消；**不引入新协议面**；
+- 全双工 Realtime WebSocket 列为后续研究项，Gate 前只提交最小 WSS 探针
+  （Python 本机脚本），不写设备代码；
+- 约束：若实施 Realtime，新增 `otool_llm_realtime.h`，禁止污染
+  `otool_llm_text.h`；工具 registry/schema/取消语义与文本 Agent 对齐；
+- 验收清单：WSS 探针、半双工设计、SDK/main 无语音代码混入。
+
+WP10 最小探针与半双工 MVP 为后续工作项（依赖语音 API 凭证与模型可用性评估）。
