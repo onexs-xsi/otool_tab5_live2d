@@ -15,6 +15,7 @@ idf_component_register(
         otool_tab5_component
         otool_lvgl_idf_port
         otool_llm_sdk
+        otool_speech_sdk
         espressif__esp_hosted
         espressif__esp_wifi_remote
         lvgl__lvgl

@@ -2,7 +2,7 @@
 
 > 基线日期：2026-08-22  
 > 目标组件：`components/otool_llm_sdk`  
-> 计划状态：Agent MVP `0.3.0` 已实施，进入硬件回归阶段
+> 计划状态：Agent MVP `0.3.0` 已实施；独立 Speech MVP 已进入真机回归阶段
 > 目标版本：文本/工具 Agent MVP `0.3.0`，可靠性版本 `0.3.x`
 
 ## 0. 2026-08-22 范围调整
@@ -21,6 +21,14 @@
 
 因此，下文早期基线中“OpenAI 真实服务必须通过”和“语音探针”的表述是原计划
 目标；若与本节冲突，以本节和文末最新进度记录为准。
+
+### 0.1 2026-08-23 语音范围恢复
+
+用户已恢复语音接入工作，§0 第 3 条“语音冻结”从本日期起结束。当前实现仍遵守
+组件边界：`otool_llm_sdk` 保持文本/工具 Agent，不加入音频协议；流式 ASR、TTS
+和 PCM 适配位于独立的 `components/otool_speech_sdk`。最终决策、配置和真机验收
+见 `docs/adr/ADR-002-voice-expansion.md` 与
+`docs/volcengine_speech_integration.md`。OpenAI 专属完善仍按 §0 暂缓。
 
 ## 1. 执行结论
 

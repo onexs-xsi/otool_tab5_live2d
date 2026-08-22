@@ -58,7 +58,7 @@ static constexpr size_t AGENT_REPLY_CAP = 4096;
 
 static SemaphoreHandle_t s_trigger_sem = nullptr;   /* agent <text> 触发 */
 static SemaphoreHandle_t s_reply_lock = nullptr;    /* 回复/状态缓冲锁 */
-static char s_pending_question[256] = { 0 };
+static char s_pending_question[1024] = { 0 };
 static char s_reply_buf[AGENT_REPLY_CAP];
 static size_t s_reply_len = 0;
 static char s_last_error[192] = { 0 };
@@ -409,7 +409,7 @@ static void agent_worker_task(void *arg)
     s_agent.store(agent); /* console agent-cancel 可用 */
     s_phase.store(AGENT_APP_PHASE_READY);
 
-    char question[256] = { 0 };
+    char question[1024] = { 0 };
     for (;;) {
         /* 等待触发（console agent <text> / agent-cancel） */
         xSemaphoreTake(s_trigger_sem, portMAX_DELAY);
@@ -470,7 +470,7 @@ extern "C" void agent_app_ask(const char *text)
         return;
     }
     if (xSemaphoreTake(s_reply_lock, portMAX_DELAY) == pdTRUE) {
-        snprintf(s_pending_question, sizeof(s_pending_question), "%.255s", text);
+        snprintf(s_pending_question, sizeof(s_pending_question), "%.1023s", text);
         xSemaphoreGive(s_reply_lock);
     }
     /* A newer question supersedes an older cancel-only wakeup. This preserves
@@ -552,6 +552,16 @@ extern "C" const char *agent_proto_name(void)
 extern "C" agent_app_phase_t agent_app_phase(void)
 {
     return s_phase.load();
+}
+
+extern "C" int agent_app_round(void)
+{
+    return s_round.load();
+}
+
+extern "C" bool agent_app_busy(void)
+{
+    return s_busy.load();
 }
 
 extern "C" void agent_app_start(void)

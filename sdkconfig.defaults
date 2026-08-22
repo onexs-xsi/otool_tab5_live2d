@@ -53,6 +53,12 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
+# Volcengine ASR returns more HTTP Upgrade headers than ESP-IDF's 1 KiB
+# websocket transport default can hold. This is the transport handshake buffer,
+# not esp_websocket_client's later frame buffer. Release it after the upgrade.
+CONFIG_WS_BUFFER_SIZE=8192
+CONFIG_WS_DYNAMIC_BUFFER=y
+
 # 调试期关闭 brownout 检测（USB 供电瞬时电流导致误复位；量产固件应恢复检测）
 CONFIG_ESP_BROWNOUT_DET=n
 

@@ -1,0 +1,48 @@
+menu "otool_speech_sdk"
+
+config OTOOL_SPEECH_ASR_PACKET_MS
+    int "ASR packet duration (ms)"
+    default 200
+    range 100 200
+    help
+        Volcengine recommends 100-200 ms packets and documents 200 ms as
+        optimal for the optimized bidirectional endpoint.
+
+config OTOOL_SPEECH_ASR_MAX_RESPONSE_BYTES
+    int "Maximum assembled ASR WebSocket message (bytes)"
+    default 16384
+    range 2048 65536
+
+config OTOOL_SPEECH_ASR_MAX_TRANSCRIPT_BYTES
+    int "Maximum final ASR transcript (bytes)"
+    default 1024
+    range 256 8192
+
+config OTOOL_SPEECH_ASR_FILE_MAX_RESPONSE_BYTES
+    int "Maximum recording-file ASR query response (bytes)"
+    default 32768
+    range 4096 131072
+    help
+        Maximum JSON response retained while polling recording-file ASR. The
+        full result can include utterance metadata even though the public API
+        returns only result.text to the caller.
+
+config OTOOL_SPEECH_WS_TASK_STACK_SIZE
+    int "Speech WebSocket task stack size (bytes)"
+    default 8192
+    range 4096 32768
+
+config OTOOL_SPEECH_WS_BUFFER_BYTES
+    int "Speech WebSocket receive chunk size (bytes)"
+    default 2048
+    range 512 16384
+
+config OTOOL_SPEECH_TTS_STREAM_BUFFER_BYTES
+    int "Maximum assembled TTS WebSocket message (bytes)"
+    default 32768
+    range 8192 65536
+    help
+        Must fit one bidirectional TTS PCM audio frame plus its protocol
+        envelope. 32 KiB leaves headroom for current 16 kHz PCM chunks.
+
+endmenu

@@ -1,70 +1,73 @@
-# ADR-002：语音扩展方案（WP10）
+# ADR-002：语音扩展采用半双工 ASR → Agent → TTS
 
-状态：草稿（规划；文本 Agent MVP 已稳定后评估）
-日期：2026-08-22
-相关：docs/otool_llm_sdk_agent_implementation_plan.md §WP10
+状态：已接受，MVP 已实现（待火山账号与 Tab5 真机联调）
+
+日期：2026-08-23
+
+相关：`docs/volcengine_speech_integration.md`
 
 ## 背景
 
-文本 Agent（Responses/Chat 双协议 + 工具闭环）已在真机稳定（WP6/WP8/WP9）。
-下一步语音扩展存在两条路线，本文记录决策框架与约束；**在 ADR 定稿和最小
-探针通过前，不把任何语音代码混入 Agent MVP**（§WP10 Gate）。
-
-## 候选方案
-
-### A. 半双工链路（推荐先做 MVP）
-
-ASR → 文本 Agent（现有 `otool_llm_text.h` + agent runtime，零改动）→ TTS
-
-- 优点：完全复用现有 SDK 与真机验证过的 Agent 状态机/工具/取消；增量小；
-  故障域清晰（三段独立可替换）；调试与现有 console 工作流一致。
-- 缺点：端到端延迟 = ASR 尾点 + 模型首 token + TTS 首帧，存在"打断"窗口；
-  需要 VAD/尾点检测与播放打断逻辑。
-- 组件：麦克风采集（Tab5 自带麦克风/PDM）→ ASR（本地或云端 HTTP）→
-  文本注入 `llm_app_ask_text()` 同构入口（agent 已有 `agent_app_ask`）→
-  回复文本 → TTS（云端 HTTP → I2S/Codec 播放）。
-- 新增 API 形态建议：`otool_llm_voice.h`（可选）只做胶水，不碰 text 协议。
-
-### B. 全双工 Realtime WebSocket
-
-- 优点：单连接、低首帧延迟、支持打断（barge-in）。
-- 缺点：新传输（WSS）、新协议（OpenAI Realtime 事件；Ark 需确认兼容模型与
-  鉴权）、工具调用映射要重新验证（Realtime 的 function_call 事件）、
-  VAD/回声消除/半双工音频管理复杂、真机调试成本高。
-- 约束：若实施，新增 `otool_llm_realtime.h`，**禁止污染 `otool_llm_text.h`**；
-  tool registry/schema 校验/取消语义必须与文本 Agent 对齐（同一
-  `otool_llm_tool_definition_t` 与 `otool_llm_tool_registry_t`）。
+设备已经具备文本 Agent、工具调用、Tab5 四通道录音和双通道播放能力。当前目标是
+接入火山引擎语音识别和语音播放，同时保持 ESP32-P4 上的内存上限、无密钥安全
+启动，以及现有文本 Agent 的 provider/工具能力不变。
 
 ## 决策
 
-1. 先做方案 A（半双工）MVP：复用现有 Agent，先解决"采集→ASR→文本→TTS→
-   播放"最小闭环与中断语义，**不引入新协议面**。
-2. 方案 B（Realtime）仅作为后续研究项；**Gate 前先提交最小 WSS 探针**
-   （本机 Python 脚本，验证鉴权、事件往返、音频帧格式），不写设备代码。
-3. 语音 API 凭证与文本 API 分开管理（NVS `otool_cred` 增加
-   `asr_key`/`tts_key` 或复用 `llm_key` 的评估结论待探针确定）。
+采用可替换的半双工链路：
 
-## 事实核查（2026-08-22）
+```text
+ES7210 4ch PCM
+  -> 选定单通道、16 kHz mono
+  -> 火山大模型流式 ASR（WebSocket）
+  -> agent_app_ask() / 现有文本 Agent 与工具闭环
+  -> 火山单向流式 TTS（HTTP chunked JSON）
+  -> Base64 PCM 解码、mono 转 stereo
+  -> Tab5 I2S/Codec 播放
+```
 
-- 火山方舟已提供 **Realtime API 调用 Doubao**（官方文档：
-  [使用 Realtime API 调用 Doubao](https://www.volcengine.com/docs/6893/1527770?lang=zh)、
-  [建连参数](https://docs.volcengine.com/docs/6893/1527759?lang=zh)），
-  全双工 WSS 方案在方舟上可行；
-- 豆包原生实时语音对话端点（openspeech 协议，与 OpenAI Realtime 不同）：
-  `wss://openspeech.bytedance.com/api/v3/realtime/dialogue`，协议为
-  `StartSession`/`dialog` 事件（非 session.update/response.create）；模型族
-  常量如 `1.2.1.1`（O 2.0）、`2.2.0.0`（SC 2.0）。参考实现仅用于协议研读，
-  不复制代码；
-- 方舟 OpenAI 兼容 Realtime 端点（`ark.cn-beijing.volces.com/api/v3/realtime*`）
-  实测 404，**确切路径待控制台/文档确认**（可能需在方舟控制台开通 Realtime
-  服务并获取专用端点）；
-- 探针脚本 `test_apps/ark_realtime_probe.py`（OpenAI 兼容协议框架）已提交，
-  参数化 endpoint/model；**未通过前不写设备代码**；
-- 待确认：Realtime 模型 ID、WSS 端点与鉴权（API Key 直连或临时 token）、
-  音频格式（采样率/编码）、方舟兼容层的事件 schema。
+具体约束：
 
-## 验收
+1. 新建独立 `components/otool_speech_sdk`，不把音频协议混入
+   `otool_llm_sdk` 的文本 SSE/Agent Runtime。
+2. ASR 使用火山优化版流式端点
+   `wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async`，输入固定为
+   16 kHz、16-bit、signed little-endian、mono PCM，按 200 ms 聚包并 gzip。
+3. Agent 回复使用单向流式 TTS HTTP
+   `https://openspeech.bytedance.com/api/v3/tts/unidirectional`，请求 raw PCM，收到
+   一个 JSON 音频块就解码并播放，不等待整段音频生成完毕。
+4. 用户提供的“音频生成 HTTP”不是主对话 TTS 链路；保留为后续音效/定制音频
+   能力候选，不在本次 MVP 中实现。
+5. 录音和播放互斥，不做回声消除和全双工打断；这些能力必须在半双工真机稳定后
+   再独立评估。
+6. Speech API Key、ASR/TTS resource id 和 speaker id 由本地 `sdkconfig` 手工配置。
+   空密钥禁止语音网络请求并禁用按钮，但不影响设备/UI 启动。
 
-- [ ] 最小 WSS 探针（Python）：连接、鉴权、文本/事件往返、断线重连语义
-- [ ] 半双工 MVP 设计（模块划分、buffer、VAD/打断、播放）提交到本 ADR
-- [ ] 未通过前，`main/` 不出现语音相关代码，SDK 不出现 realtime 头文件
+## 原因
+
+- 复用已经具备工具调用能力的文本 Agent，不需要重新实现 Realtime 工具协议。
+- 16 kHz 端到端不需要设备侧重采样；仅执行 4ch→mono 和 mono→stereo，CPU 与
+  RAM 开销可控。
+- ASR WebSocket 与 TTS HTTP 的生命周期互相独立，便于分别诊断鉴权、网络、
+  识别、合成和 Codec 故障。
+- TTS 使用 raw PCM 可直接交给现有 I2S 播放，无 WAV 头处理和整段缓存。
+
+## 后果与限制
+
+- 当前交互必须手动按键开始、再次按键停止；尚无 VAD、自动尾点或 barge-in。
+- HTTP 回调当前对 I2S 写入施加背压；这是有界内存设计，但真机需要测量是否会
+  触发网络超时。若发生，再在组件和驱动间增加有界 PCM 队列。
+- `sdkconfig` 方式会把密钥编入固件，符合当前部署要求，但固件不是安全密钥仓库；
+  `sdkconfig` 和生成固件不得公开发布。
+- ASR 成功而文本 Agent 未配置时，只展示识别文本和安全错误，不调用 TTS。
+- 未配置 TTS speaker 时，ASR 和文本 Agent 仍可运行，仅跳过语音播放。
+
+## 后续决策门
+
+只有以下项目在真机通过后，才评估全双工 Realtime：
+
+- 连续 20 轮 ASR → Agent → TTS 无崩溃、无任务/连接泄漏；
+- 测得 ASR 最终结果、Agent 首 token、TTS 首音频三段延迟；
+- 确认最合适的 ES7210 麦克风通道和增益；
+- 断网、无权限、配额耗尽、空识别、TTS 中断均可恢复到 READY；
+- 峰值 internal heap、PSRAM 和任务栈余量达到发布门槛。

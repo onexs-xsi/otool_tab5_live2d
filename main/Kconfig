@@ -33,6 +33,68 @@ config OTOOL_LLM_MODEL
     string "Doubao model id"
     default "doubao-seed-2-1-turbo-260628"
 
+config OTOOL_SPEECH_API_KEY
+    string "Volcengine Speech API key"
+    default ""
+    help
+      Configure the API Key created in the Volcengine Speech console. This is
+      intentionally separate from the Ark LLM key. An empty value disables
+      cloud ASR/TTS without aborting startup. Never place a real value in a
+      tracked defaults file.
+
+config OTOOL_SPEECH_ASR_RESOURCE_ID
+    string "Volcengine ASR resource id"
+    default "volc.seedasr.sauc.duration"
+    help
+      Streaming ASR 2.0 hourly resource id from the new Speech console.
+      Use volc.seedasr.sauc.concurrent only for a concurrency entitlement.
+
+config OTOOL_SPEECH_TTS_RESOURCE_ID
+    string "Volcengine TTS resource id"
+    default "seed-tts-2.0"
+    help
+      Standard Speech Synthesis 2.0 resource id from the new Speech console.
+
+config OTOOL_SPEECH_TTS_SPEAKER
+    string "Volcengine TTS speaker id"
+    default ""
+    help
+      Voice id from Speech console > Voice Library. An empty value leaves ASR
+      available but skips response playback safely.
+
+config OTOOL_SPEECH_MIC_CHANNEL
+    int "ES7210 microphone channel used for ASR"
+    default 0
+    range 0 3
+
+config OTOOL_SPEECH_ASR_FINISH_TIMEOUT_MS
+    int "ASR final result timeout (ms)"
+    default 15000
+    range 1000 60000
+
+config OTOOL_SPEECH_TTS_TIMEOUT_MS
+    int "TTS stream timeout (ms)"
+    default 60000
+    range 5000 180000
+
+config OTOOL_SPEECH_APP_TASK_STACK_SIZE
+    int "Voice interaction task stack size (bytes)"
+    default 16384
+    range 8192 32768
+
+config OTOOL_SPEECH_PROBE_TASK_STACK_SIZE
+    int "Speech API probe task stack size (bytes)"
+    default 16384
+    range 8192 32768
+
+config OTOOL_SPEECH_PROBE_MAX_PCM_BYTES
+    int "Speech TTS-to-ASR probe PCM limit (bytes)"
+    default 524288
+    range 65536 1048576
+    help
+      Maximum PSRAM allocation for the console speech-loopback command. The
+      probe never sends this data to the physical speaker.
+
 config OTOOL_LLM_LLM_TASK_STACK_SIZE
     int "LLM worker task stack size (bytes)"
     default 32768

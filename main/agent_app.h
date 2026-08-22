@@ -67,6 +67,12 @@ const char *agent_proto_name(void);
  */
 agent_app_phase_t agent_app_phase(void);
 
+/** Monotonic run number, incremented when a queued question starts. */
+int agent_app_round(void);
+
+/** True while otool_llm_agent_run_stream is active. */
+bool agent_app_busy(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -3,6 +3,7 @@
 
 #include "ui_app.h"
 #include "agent_app.h"
+#include "otool_speech_sdk.h"
 #include "otool_tab5_component.h"
 
 #include "otool_lvgl_port.h"
@@ -58,14 +59,20 @@ enum ui_audio_state_t {
     UI_AUDIO_STARTING,
     UI_AUDIO_RECORDING,
     UI_AUDIO_STOPPING,
+    UI_AUDIO_TRANSCRIBING,
+    UI_AUDIO_WAITING_AGENT,
+    UI_AUDIO_SYNTHESIZING,
+    UI_AUDIO_PLAYING,
+    UI_AUDIO_SPEECH_DISABLED,
     UI_AUDIO_UNAVAILABLE,
     UI_AUDIO_ERROR,
 };
 
-static constexpr uint32_t AUDIO_SAMPLE_RATE_HZ = 48000;
+static constexpr uint32_t AUDIO_SAMPLE_RATE_HZ = 16000;
 static constexpr uint32_t AUDIO_CAPTURE_FRAMES = AUDIO_SAMPLE_RATE_HZ / 100;  // 10 ms
 static constexpr size_t AUDIO_CAPTURE_SAMPLES =
     AUDIO_CAPTURE_FRAMES * m5::tab5::M5TAB5_AUDIO_RECORD_CHANNELS;
+static constexpr size_t AUDIO_PLAYBACK_CHUNK_FRAMES = 2048;
 
 /* CMake EMBED_FILES uses each asset basename to construct linker symbols. */
 extern const uint8_t _binary_noto_zh_mid_24_bin_start[];
@@ -136,6 +143,7 @@ static lv_obj_t *s_wave_bars[5] = {};
 
 static m5::tab5::otool_tab5_component *s_tab5 = nullptr;
 static SemaphoreHandle_t s_audio_command_sem = nullptr;
+static SemaphoreHandle_t s_speech_text_lock = nullptr;
 static TaskHandle_t s_audio_task = nullptr;
 static std::atomic<ui_audio_state_t> s_audio_state{UI_AUDIO_INITIALIZING};
 static std::atomic<bool> s_record_requested{false};
@@ -145,6 +153,12 @@ static std::atomic<uint32_t> s_recorded_bytes{0};
 static std::atomic<uint32_t> s_capture_started_ms{0};
 static std::atomic<esp_err_t> s_audio_error{ESP_OK};
 alignas(4) static int16_t s_capture_buffer[AUDIO_CAPTURE_SAMPLES] = {};
+alignas(4) static int16_t s_capture_mono[AUDIO_CAPTURE_FRAMES] = {};
+alignas(4) static int16_t s_playback_stereo[AUDIO_PLAYBACK_CHUNK_FRAMES * 2] = {};
+static char s_live_transcript[CONFIG_OTOOL_SPEECH_ASR_MAX_TRANSCRIPT_BYTES] = "";
+static char s_speech_notice[160] = "";
+static char s_final_transcript[CONFIG_OTOOL_SPEECH_ASR_MAX_TRANSCRIPT_BYTES] = "";
+static char s_tts_reply[4096] = "";
 
 static char s_status_text[96] = "正在启动";
 static char s_reply_text[4096 + 160] = "";
@@ -204,7 +218,42 @@ static bool agent_phase_is_busy(agent_app_phase_t phase)
 static bool capture_is_active(ui_audio_state_t state)
 {
     return state == UI_AUDIO_STARTING || state == UI_AUDIO_RECORDING ||
-           state == UI_AUDIO_STOPPING;
+           state == UI_AUDIO_STOPPING || state == UI_AUDIO_TRANSCRIBING;
+}
+
+static bool speech_key_configured(void)
+{
+    return CONFIG_OTOOL_SPEECH_API_KEY[0] != '\0' &&
+           CONFIG_OTOOL_SPEECH_ASR_RESOURCE_ID[0] != '\0';
+}
+
+static void speech_text_set(const char *transcript, const char *notice)
+{
+    if (s_speech_text_lock == nullptr ||
+        xSemaphoreTake(s_speech_text_lock, portMAX_DELAY) != pdTRUE) return;
+    if (transcript != nullptr) {
+        snprintf(s_live_transcript, sizeof(s_live_transcript), "%s", transcript);
+    }
+    if (notice != nullptr) {
+        snprintf(s_speech_notice, sizeof(s_speech_notice), "%s", notice);
+    }
+    xSemaphoreGive(s_speech_text_lock);
+}
+
+static void speech_text_copy(char *transcript, size_t transcript_capacity,
+                             char *notice, size_t notice_capacity)
+{
+    if (transcript_capacity != 0) transcript[0] = '\0';
+    if (notice_capacity != 0) notice[0] = '\0';
+    if (s_speech_text_lock == nullptr ||
+        xSemaphoreTake(s_speech_text_lock, portMAX_DELAY) != pdTRUE) return;
+    if (transcript_capacity != 0) {
+        snprintf(transcript, transcript_capacity, "%s", s_live_transcript);
+    }
+    if (notice_capacity != 0) {
+        snprintf(notice, notice_capacity, "%s", s_speech_notice);
+    }
+    xSemaphoreGive(s_speech_text_lock);
 }
 
 static void audio_level_update(const int16_t *samples, size_t count)
@@ -234,6 +283,66 @@ static esp_err_t audio_hardware_init(void)
     return s_tab5->audio_init(config);
 }
 
+static void asr_transcript_callback(const char *text, bool definite, void *user_ctx)
+{
+    (void)user_ctx;
+    speech_text_set(text, definite ? "识别完成" : "正在实时识别");
+}
+
+struct tts_playback_context_t {
+    bool started;
+};
+
+static esp_err_t tts_pcm_callback(const int16_t *samples, size_t sample_count, void *user_ctx)
+{
+    auto *context = static_cast<tts_playback_context_t *>(user_ctx);
+    if (s_tab5 == nullptr || context == nullptr) return ESP_ERR_INVALID_STATE;
+    if (!context->started) {
+        esp_err_t err = s_tab5->audio_play_start();
+        if (err != ESP_OK) return err;
+        context->started = true;
+        s_audio_state.store(UI_AUDIO_PLAYING);
+        speech_text_set(nullptr, "正在播放 Agent 回复");
+    }
+
+    size_t offset = 0;
+    while (offset < sample_count) {
+        size_t frames = sample_count - offset;
+        if (frames > AUDIO_PLAYBACK_CHUNK_FRAMES) frames = AUDIO_PLAYBACK_CHUNK_FRAMES;
+        size_t converted = otool_speech_pcm_mono_to_stereo(
+            samples + offset, frames, s_playback_stereo,
+            sizeof(s_playback_stereo) / sizeof(s_playback_stereo[0]));
+        if (converted != frames) return ESP_ERR_INVALID_SIZE;
+        size_t expected_bytes = converted * 2 * sizeof(int16_t);
+        size_t written = 0;
+        esp_err_t err = s_tab5->audio_play_write(s_playback_stereo, expected_bytes,
+                                                 &written, 2000);
+        if (err != ESP_OK || written != expected_bytes) {
+            return err != ESP_OK ? err : ESP_FAIL;
+        }
+        offset += converted;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t wait_for_agent_reply(int previous_round, uint32_t timeout_ms)
+{
+    int64_t deadline_us = esp_timer_get_time() + static_cast<int64_t>(timeout_ms) * 1000;
+    bool run_started = false;
+    while (esp_timer_get_time() < deadline_us) {
+        if (agent_app_round() > previous_round) run_started = true;
+        agent_app_phase_t phase = agent_app_phase();
+        if (phase == AGENT_APP_PHASE_DISABLED) return ESP_ERR_INVALID_STATE;
+        if (run_started && !agent_app_busy()) {
+            if (phase == AGENT_APP_PHASE_COMPLETED) return ESP_OK;
+            if (phase == AGENT_APP_PHASE_CANCELLED) return ESP_ERR_INVALID_STATE;
+            if (phase == AGENT_APP_PHASE_ERROR) return ESP_FAIL;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    return ESP_ERR_TIMEOUT;
+}
+
 static void audio_capture_task(void *arg)
 {
     (void)arg;
@@ -246,7 +355,11 @@ static void audio_capture_task(void *arg)
             s_audio_error.store(err);
             if (err == ESP_OK) {
                 initialized = true;
-                s_audio_state.store(UI_AUDIO_READY);
+                s_audio_state.store(speech_key_configured()
+                                        ? UI_AUDIO_READY : UI_AUDIO_SPEECH_DISABLED);
+                if (!speech_key_configured()) {
+                    speech_text_set("", "语音服务未配置：请在 sdkconfig 设置 Speech API Key");
+                }
                 ESP_LOGI(TAG, "audio interaction ready");
             } else {
                 s_audio_state.store(UI_AUDIO_UNAVAILABLE);
@@ -270,17 +383,43 @@ static void audio_capture_task(void *arg)
         s_audio_level_percent.store(0);
         s_recorded_bytes.store(0);
         s_capture_started_ms.store(static_cast<uint32_t>(esp_timer_get_time() / 1000));
+        speech_text_set("", "正在连接火山引擎流式识别");
 
-        esp_err_t err = s_tab5->audio_record_start();
-        s_audio_error.store(err);
+        otool_speech_asr_config_t asr_config{};
+        asr_config.struct_size = sizeof(asr_config);
+        asr_config.api_key = CONFIG_OTOOL_SPEECH_API_KEY;
+        asr_config.resource_id = CONFIG_OTOOL_SPEECH_ASR_RESOURCE_ID;
+        asr_config.connect_timeout_ms = 15000;
+        asr_config.enable_itn = true;
+        asr_config.enable_punctuation = true;
+        asr_config.enable_ddc = true;
+        asr_config.enable_nonstream = false;
+        asr_config.on_transcript = asr_transcript_callback;
+        otool_speech_asr_handle_t asr = nullptr;
+        esp_err_t err = otool_speech_asr_open(&asr_config, &asr);
         if (err != ESP_OK) {
             s_record_requested.store(false);
+            s_audio_error.store(err);
             s_audio_state.store(UI_AUDIO_ERROR);
+            speech_text_set(nullptr, "语音识别连接失败；轻触按钮重试");
+            ESP_LOGE(TAG, "ASR open failed: %s", esp_err_to_name(err));
+            continue;
+        }
+
+        err = s_tab5->audio_record_start();
+        s_audio_error.store(err);
+        if (err != ESP_OK) {
+            otool_speech_asr_close(asr);
+            s_record_requested.store(false);
+            s_audio_state.store(UI_AUDIO_ERROR);
+            speech_text_set(nullptr, "麦克风启动失败；轻触按钮重试");
             ESP_LOGE(TAG, "record start failed: %s", esp_err_to_name(err));
             continue;
         }
 
         s_audio_state.store(UI_AUDIO_RECORDING);
+        speech_text_set(nullptr, "录音中；正在实时识别");
+        esp_err_t stream_error = ESP_OK;
         while (s_record_requested.load()) {
             size_t bytes_read = 0;
             err = s_tab5->audio_record_read(
@@ -290,7 +429,18 @@ static void audio_capture_task(void *arg)
                 100);
             if (bytes_read > 0) {
                 s_recorded_bytes.fetch_add(static_cast<uint32_t>(bytes_read));
-                audio_level_update(s_capture_buffer, bytes_read / sizeof(int16_t));
+                size_t mono_samples = otool_speech_pcm_4ch_to_mono(
+                    s_capture_buffer, bytes_read / sizeof(int16_t),
+                    CONFIG_OTOOL_SPEECH_MIC_CHANNEL, s_capture_mono,
+                    sizeof(s_capture_mono) / sizeof(s_capture_mono[0]));
+                audio_level_update(s_capture_mono, mono_samples);
+                stream_error = otool_speech_asr_write_pcm(asr, s_capture_mono, mono_samples);
+                if (stream_error != ESP_OK) {
+                    s_audio_error.store(stream_error);
+                    s_record_requested.store(false);
+                    ESP_LOGE(TAG, "ASR audio send failed: %s", esp_err_to_name(stream_error));
+                    break;
+                }
             }
             if (err != ESP_OK && err != ESP_ERR_TIMEOUT) {
                 s_audio_error.store(err);
@@ -302,16 +452,86 @@ static void audio_capture_task(void *arg)
 
         s_audio_state.store(UI_AUDIO_STOPPING);
         esp_err_t stop_err = s_tab5->audio_record_stop();
-        if (err != ESP_OK && err != ESP_ERR_TIMEOUT) {
+        if (stream_error != ESP_OK || (err != ESP_OK && err != ESP_ERR_TIMEOUT)) {
+            (void)otool_speech_asr_cancel(asr);
+            otool_speech_asr_close(asr);
             s_audio_state.store(UI_AUDIO_ERROR);
+            speech_text_set(nullptr, "录音或识别流中断；轻触按钮重试");
         } else if (stop_err != ESP_OK) {
+            (void)otool_speech_asr_cancel(asr);
+            otool_speech_asr_close(asr);
             s_audio_error.store(stop_err);
             s_audio_state.store(UI_AUDIO_ERROR);
+            speech_text_set(nullptr, "麦克风停止失败；轻触按钮重试");
             ESP_LOGE(TAG, "record stop failed: %s", esp_err_to_name(stop_err));
         } else {
+            s_audio_state.store(UI_AUDIO_TRANSCRIBING);
+            speech_text_set(nullptr, "正在等待最终识别结果");
+            esp_err_t asr_error = otool_speech_asr_finish(
+                asr, s_final_transcript, sizeof(s_final_transcript),
+                CONFIG_OTOOL_SPEECH_ASR_FINISH_TIMEOUT_MS);
+            otool_speech_asr_close(asr);
+            if (asr_error != ESP_OK || s_final_transcript[0] == '\0') {
+                s_audio_error.store(asr_error != ESP_OK ? asr_error : ESP_ERR_INVALID_RESPONSE);
+                s_audio_state.store(UI_AUDIO_ERROR);
+                speech_text_set(nullptr, "没有获得有效识别结果；轻触按钮重试");
+                continue;
+            }
+
+            speech_text_set(s_final_transcript, "识别完成，已发送给 Agent");
+            s_audio_state.store(UI_AUDIO_WAITING_AGENT);
+            int previous_round = agent_app_round();
+            agent_app_ask(s_final_transcript);
+            esp_err_t agent_error = wait_for_agent_reply(previous_round, 130000);
+            if (agent_error != ESP_OK) {
+                s_audio_error.store(agent_error);
+                s_audio_state.store(UI_AUDIO_ERROR);
+                speech_text_set(nullptr,
+                    agent_app_phase() == AGENT_APP_PHASE_DISABLED
+                        ? "识别成功，但文本 Agent 未配置 API Key"
+                        : "识别成功，但 Agent 未能完成回复");
+                continue;
+            }
+
+            size_t reply_size = agent_app_reply_read(s_tts_reply, sizeof(s_tts_reply));
+            if (reply_size == 0) {
+                s_audio_error.store(ESP_ERR_INVALID_RESPONSE);
+                s_audio_state.store(UI_AUDIO_ERROR);
+                speech_text_set(nullptr, "Agent 已完成，但没有可播放的文本");
+                continue;
+            }
+            if (CONFIG_OTOOL_SPEECH_TTS_SPEAKER[0] == '\0') {
+                s_audio_error.store(ESP_OK);
+                s_audio_level_percent.store(0);
+                s_audio_state.store(UI_AUDIO_READY);
+                speech_text_set(nullptr, "Agent 已回复；未配置 TTS 音色，已跳过播放");
+                continue;
+            }
+
+            s_audio_state.store(UI_AUDIO_SYNTHESIZING);
+            speech_text_set(nullptr, "正在合成 Agent 回复");
+            otool_speech_tts_config_t tts_config{};
+            tts_config.struct_size = sizeof(tts_config);
+            tts_config.api_key = CONFIG_OTOOL_SPEECH_API_KEY;
+            tts_config.resource_id = CONFIG_OTOOL_SPEECH_TTS_RESOURCE_ID;
+            tts_config.speaker = CONFIG_OTOOL_SPEECH_TTS_SPEAKER;
+            tts_config.sample_rate_hz = AUDIO_SAMPLE_RATE_HZ;
+            tts_config.timeout_ms = CONFIG_OTOOL_SPEECH_TTS_TIMEOUT_MS;
+            tts_playback_context_t playback{};
+            esp_err_t tts_error = otool_speech_tts_stream(
+                &tts_config, s_tts_reply, tts_pcm_callback, &playback);
+            if (playback.started) (void)s_tab5->audio_play_stop();
+            if (tts_error != ESP_OK || !playback.started) {
+                s_audio_error.store(tts_error != ESP_OK ? tts_error : ESP_ERR_INVALID_RESPONSE);
+                s_audio_state.store(UI_AUDIO_ERROR);
+                speech_text_set(nullptr, "Agent 已回复，但语音合成或播放失败");
+                continue;
+            }
+
             s_audio_error.store(ESP_OK);
             s_audio_level_percent.store(0);
             s_audio_state.store(UI_AUDIO_READY);
+            speech_text_set(nullptr, "回复播放完成；可以开始下一轮");
         }
     }
 }
@@ -582,6 +802,9 @@ static void update_audio_visual(void)
     uint32_t level = s_audio_level_percent.load();
     uint32_t bytes = s_recorded_bytes.load();
     uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    char transcript[CONFIG_OTOOL_SPEECH_ASR_MAX_TRANSCRIPT_BYTES] = "";
+    char notice[sizeof(s_speech_notice)] = "";
+    speech_text_copy(transcript, sizeof(transcript), notice, sizeof(notice));
 
     if (state != s_last_audio_state) {
         s_last_audio_state = state;
@@ -597,7 +820,7 @@ static void update_audio_visual(void)
         case UI_AUDIO_READY:
             lv_label_set_text(s_record_icon, LV_SYMBOL_AUDIO);
             lv_label_set_text(s_record_state_label, "READY");
-            lv_label_set_text(s_transcript_title, "LIVE CAPTURE | 48K | 16BIT | 4CH");
+            lv_label_set_text(s_transcript_title, "VOICE AGENT | 16K | 16BIT | MONO ASR");
             lv_obj_set_style_bg_color(s_record_button, lv_color_hex(0xff7da9), 0);
             break;
         case UI_AUDIO_STARTING:
@@ -610,7 +833,7 @@ static void update_audio_visual(void)
         case UI_AUDIO_RECORDING:
             lv_label_set_text(s_record_icon, LV_SYMBOL_STOP);
             lv_label_set_text(s_record_state_label, "REC");
-            lv_label_set_text(s_transcript_title, "LIVE CAPTURE | RECORDING | 4CH PCM");
+            lv_label_set_text(s_transcript_title, "VOICE AGENT | STREAMING ASR");
             lv_obj_set_style_bg_color(s_record_button, lv_color_hex(0xf05f7f), 0);
             break;
         case UI_AUDIO_STOPPING:
@@ -618,6 +841,41 @@ static void update_audio_visual(void)
             lv_label_set_text(s_record_state_label, "WAIT");
             lv_label_set_text(s_transcript_title, "LIVE CAPTURE | FINALIZING");
             lv_obj_set_style_bg_color(s_record_button, lv_color_hex(0xa98ca7), 0);
+            lv_obj_add_state(s_record_button, LV_STATE_DISABLED);
+            break;
+        case UI_AUDIO_TRANSCRIBING:
+            lv_label_set_text(s_record_icon, LV_SYMBOL_REFRESH);
+            lv_label_set_text(s_record_state_label, "ASR");
+            lv_label_set_text(s_transcript_title, "VOICE AGENT | FINAL TRANSCRIPT");
+            lv_obj_set_style_bg_color(s_record_button, lv_color_hex(0x938bd0), 0);
+            lv_obj_add_state(s_record_button, LV_STATE_DISABLED);
+            break;
+        case UI_AUDIO_WAITING_AGENT:
+            lv_label_set_text(s_record_icon, LV_SYMBOL_REFRESH);
+            lv_label_set_text(s_record_state_label, "THINK");
+            lv_label_set_text(s_transcript_title, "VOICE AGENT | AGENT WORKING");
+            lv_obj_set_style_bg_color(s_record_button, lv_color_hex(0x8e9cff), 0);
+            lv_obj_add_state(s_record_button, LV_STATE_DISABLED);
+            break;
+        case UI_AUDIO_SYNTHESIZING:
+            lv_label_set_text(s_record_icon, LV_SYMBOL_REFRESH);
+            lv_label_set_text(s_record_state_label, "TTS");
+            lv_label_set_text(s_transcript_title, "VOICE AGENT | SYNTHESIZING");
+            lv_obj_set_style_bg_color(s_record_button, lv_color_hex(0x65c9d0), 0);
+            lv_obj_add_state(s_record_button, LV_STATE_DISABLED);
+            break;
+        case UI_AUDIO_PLAYING:
+            lv_label_set_text(s_record_icon, LV_SYMBOL_VOLUME_MAX);
+            lv_label_set_text(s_record_state_label, "PLAY");
+            lv_label_set_text(s_transcript_title, "VOICE AGENT | PLAYING RESPONSE");
+            lv_obj_set_style_bg_color(s_record_button, lv_color_hex(0x70c9a5), 0);
+            lv_obj_add_state(s_record_button, LV_STATE_DISABLED);
+            break;
+        case UI_AUDIO_SPEECH_DISABLED:
+            lv_label_set_text(s_record_icon, LV_SYMBOL_CLOSE);
+            lv_label_set_text(s_record_state_label, "CONFIG");
+            lv_label_set_text(s_transcript_title, "VOICE AGENT | SERVICE DISABLED");
+            lv_obj_set_style_bg_color(s_record_button, lv_color_hex(0x9c96aa), 0);
             lv_obj_add_state(s_record_button, LV_STATE_DISABLED);
             break;
         case UI_AUDIO_UNAVAILABLE:
@@ -629,7 +887,7 @@ static void update_audio_visual(void)
         case UI_AUDIO_ERROR:
             lv_label_set_text(s_record_icon, LV_SYMBOL_REFRESH);
             lv_label_set_text(s_record_state_label, "RETRY");
-            lv_label_set_text(s_transcript_title, "LIVE CAPTURE | CAPTURE ERROR");
+            lv_label_set_text(s_transcript_title, "VOICE AGENT | ERROR");
             lv_obj_set_style_bg_color(s_record_button, lv_color_hex(0xd66472), 0);
             break;
         }
@@ -640,8 +898,13 @@ static void update_audio_visual(void)
         lv_label_set_text(s_transcript_text, "正在初始化 ES7210 与 I2S 录音链路...");
         break;
     case UI_AUDIO_READY:
-        if (bytes == 0) {
-            lv_label_set_text(s_transcript_text, "轻触左侧按钮开始录音");
+        if (transcript[0] != '\0') {
+            lv_label_set_text_fmt(s_transcript_text, "%s\n%s", transcript,
+                                  notice[0] != '\0' ? notice : "轻触左侧按钮开始下一轮");
+        } else if (notice[0] != '\0') {
+            lv_label_set_text(s_transcript_text, notice);
+        } else if (bytes == 0) {
+            lv_label_set_text(s_transcript_text, "轻触左侧按钮开始语音对话");
         } else {
             uint32_t duration_tenths = static_cast<uint32_t>(
                 static_cast<uint64_t>(bytes) * 10U /
@@ -655,27 +918,57 @@ static void update_audio_visual(void)
         }
         break;
     case UI_AUDIO_STARTING:
-        lv_label_set_text(s_transcript_text, "正在打开麦克风阵列...");
+        lv_label_set_text(s_transcript_text,
+                          notice[0] != '\0' ? notice : "正在打开麦克风阵列...");
         break;
     case UI_AUDIO_RECORDING: {
         uint32_t elapsed_ms = now_ms - s_capture_started_ms.load();
         uint32_t elapsed_s = elapsed_ms / 1000;
-        lv_label_set_text_fmt(s_transcript_text,
-                              "录音中 %02u:%02u | 电平 %u%% | %u KB",
-                              (unsigned)(elapsed_s / 60),
-                              (unsigned)(elapsed_s % 60),
-                              (unsigned)level,
-                              (unsigned)(bytes / 1024));
+        if (transcript[0] != '\0') {
+            lv_label_set_text_fmt(s_transcript_text,
+                                  "%s\n录音中 %02u:%02u | 电平 %u%% | %u KB",
+                                  transcript, (unsigned)(elapsed_s / 60),
+                                  (unsigned)(elapsed_s % 60), (unsigned)level,
+                                  (unsigned)(bytes / 1024));
+        } else {
+            lv_label_set_text_fmt(s_transcript_text,
+                                  "录音中 %02u:%02u | 电平 %u%% | %u KB",
+                                  (unsigned)(elapsed_s / 60),
+                                  (unsigned)(elapsed_s % 60), (unsigned)level,
+                                  (unsigned)(bytes / 1024));
+        }
         break;
     }
     case UI_AUDIO_STOPPING:
         lv_label_set_text(s_transcript_text, "正在完成本次采集...");
         break;
+    case UI_AUDIO_TRANSCRIBING:
+    case UI_AUDIO_WAITING_AGENT:
+    case UI_AUDIO_SYNTHESIZING:
+    case UI_AUDIO_PLAYING:
+        if (transcript[0] != '\0') {
+            lv_label_set_text_fmt(s_transcript_text, "%s\n%s", transcript,
+                                  notice[0] != '\0' ? notice : "处理中...");
+        } else {
+            lv_label_set_text(s_transcript_text,
+                              notice[0] != '\0' ? notice : "处理中...");
+        }
+        break;
+    case UI_AUDIO_SPEECH_DISABLED:
+        lv_label_set_text(s_transcript_text,
+                          "语音服务未启用：请在 menuconfig 的 otool_tab5_live2d app 中"
+                          "配置 Speech API Key 后重新编译");
+        break;
     case UI_AUDIO_UNAVAILABLE:
     case UI_AUDIO_ERROR:
-        lv_label_set_text_fmt(s_transcript_text,
-                              "音频链路不可用：%s | 轻触左侧按钮重试",
-                              esp_err_to_name(s_audio_error.load()));
+        if (notice[0] != '\0') {
+            lv_label_set_text_fmt(s_transcript_text, "%s | %s", notice,
+                                  esp_err_to_name(s_audio_error.load()));
+        } else {
+            lv_label_set_text_fmt(s_transcript_text,
+                                  "语音链路不可用：%s | 轻触左侧按钮重试",
+                                  esp_err_to_name(s_audio_error.load()));
+        }
         break;
     }
 
@@ -707,8 +1000,13 @@ static void ui_timer_cb(lv_timer_t *timer)
     }
 
     agent_app_phase_t phase = agent_app_phase();
+    ui_audio_state_t audio_state = s_audio_state.load();
+    agent_app_phase_t visual_phase = phase;
+    if (audio_state == UI_AUDIO_SYNTHESIZING || audio_state == UI_AUDIO_PLAYING) {
+        visual_phase = AGENT_APP_PHASE_RESPONDING;
+    }
     update_audio_visual();
-    update_phase_visual(phase, capture_is_active(s_audio_state.load()));
+    update_phase_visual(visual_phase, capture_is_active(audio_state));
     update_metrics();
 
     uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
@@ -742,8 +1040,8 @@ static void ui_timer_cb(lv_timer_t *timer)
             break;
         default:
             snprintf(s_reply_text, sizeof(s_reply_text),
-                     "Agent 工作区已就绪。\n\n底部已预留录音入口和实时转写区域；"
-                     "音频采集链路将在后续版本接入。");
+                     "Agent 工作区已就绪。\n\n轻触左下角录音按钮即可开始实时识别；"
+                     "识别结果会自动交给 Agent，并在配置音色后播放回复。");
             break;
         }
     }
@@ -761,7 +1059,10 @@ extern "C" void ui_app_start(void *tab5_comp)
     if (s_audio_command_sem == nullptr) {
         s_audio_command_sem = xSemaphoreCreateBinary();
     }
-    if (s_audio_command_sem == nullptr) {
+    if (s_speech_text_lock == nullptr) {
+        s_speech_text_lock = xSemaphoreCreateMutex();
+    }
+    if (s_audio_command_sem == nullptr || s_speech_text_lock == nullptr) {
         s_audio_error.store(ESP_ERR_NO_MEM);
         s_audio_state.store(UI_AUDIO_UNAVAILABLE);
     }
@@ -1120,11 +1421,12 @@ extern "C" void ui_app_start(void *tab5_comp)
 
     otool_lvgl_port_unlock();
 
-    if (s_audio_command_sem != nullptr && s_audio_task == nullptr) {
+    if (s_audio_command_sem != nullptr && s_speech_text_lock != nullptr &&
+        s_audio_task == nullptr) {
         BaseType_t created = xTaskCreate(
             audio_capture_task,
             "ui_audio_capture",
-            6144,
+            CONFIG_OTOOL_SPEECH_APP_TASK_STACK_SIZE,
             nullptr,
             5,
             &s_audio_task);
