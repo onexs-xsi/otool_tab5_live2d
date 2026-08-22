@@ -83,3 +83,4 @@ Desktop.ini
 # MSVC objects
 *.obj
 
+test_apps/transport_test/run_result.txt
