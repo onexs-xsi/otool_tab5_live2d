@@ -1087,3 +1087,22 @@ Gate 评估：无增长性泄漏 ✓、无 WDT ✓（SW_CPU_RESET 为 SDIO 主�
 - 验收清单：WSS 探针、半双工设计、SDK/main 无语音代码混入。
 
 WP10 最小探针与半双工 MVP 为后续工作项（依赖语音 API 凭证与模型可用性评估）。
+
+### 2026-08-22 — 基础功能收尾（UI 接入 agent + 测试矩阵补全）
+
+- `main/ui_app.cpp`：屏幕接入 agent_app（状态行显示 `agent [protocol] | round/busy/error`、
+  回复区显示 agent 中文回复、全屏 tap = `agent_app_cancel()` + 默认问询（触发
+  get_device_status 工具闭环））。真机验证：tap 等价序列（cancel → ask → 工具调用 →
+  中文回答）通过。
+- `agent.c`：实现工具循环检测——同一 run 内同 name+arguments 连续 2 次 →
+  `RUN_LIMIT_REACHED`（计划 §16.2 "重复工具死循环"，此前只有 max_turns 兜底）。
+- `agent_host_tests.c` 32 → 98 checks，§16.2 矩阵补全：
+  - policy：NULL 拒绝副作用工具（executor 不得执行）、DENY、ALLOW 三用例；
+  - callback 请求取消（TOOL_EXECUTION_STARTED 后返回 CANCEL → CANCELLED 终端）；
+  - unknown tool（`unknown_tool` 结果回传、run 不终止）；
+  - 工具业务失败（`tool_failed`）、空结果（`{}`）均回传并继续到 RUN_COMPLETED；
+  - 一轮两工具调用（不同参数）→ 2 次执行 + turn2 回传 2 个 tool_outputs。
+- 真机回归：正常工具 run（get_device_status → 中文总结 → RUN_COMPLETED）不受
+  循环检测影响。
+
+Host 测试全绿：host_tests 1386 + agent_host_tests 98。
