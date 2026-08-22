@@ -122,8 +122,19 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
     g_fake_turn++;
 
     if (g_fake_chat) {
-        /* Chat 脚本：turn1 tool_calls 流式，turn2 最终回答 */
-        if (g_fake_turn == 1) {
+        /* Chat 脚本：turn1 tool_calls 流式，turn2 最终回答（loop 模式每轮工具，
+         * 参数随 turn 变化以绕过循环检测） */
+        if (g_fake_turn == 1 || g_fake_loop) {
+            /* 参数：loop 模式每轮变化（绕过循环检测）；普通模式固定 {} */
+            const char *args = "{}";
+            size_t args_len = 2;
+            char dyn[32];
+            if (g_fake_loop) {
+                snprintf(dyn, sizeof(dyn), "{\"n\":%d}", g_fake_turn);
+                args = dyn;
+                args_len = strlen(dyn);
+            }
+
             otool_llm_text_event_t evt = {};
             evt.type = OTOOL_LLM_TEXT_EVENT_RESPONSE_STARTED;
             evt.response_id = "chat_1";
@@ -135,15 +146,15 @@ esp_err_t otool_llm_request_execute_stream(otool_llm_request_handle_t request,
             cb(&evt, user_ctx);
 
             evt.type = OTOOL_LLM_TEXT_EVENT_TOOL_ARGUMENTS_DELTA;
-            evt.data.tool_arguments_delta.delta = "{}";
-            evt.data.tool_arguments_delta.delta_len = 2;
+            evt.data.tool_arguments_delta.delta = args;
+            evt.data.tool_arguments_delta.delta_len = args_len;
             cb(&evt, user_ctx);
 
             evt.type = OTOOL_LLM_TEXT_EVENT_TOOL_CALL_DONE;
             evt.data.tool_call_done.call_id = "call_chat";
             evt.data.tool_call_done.name = g_fake_tool_name;
-            evt.data.tool_call_done.arguments = "{}";
-            evt.data.tool_call_done.arguments_len = 2;
+            evt.data.tool_call_done.arguments = args;
+            evt.data.tool_call_done.arguments_len = args_len;
             cb(&evt, user_ctx);
 
             evt.type = OTOOL_LLM_TEXT_EVENT_COMPLETED;
@@ -820,6 +831,61 @@ static void test_agent_multi_tools(void)
     otool_llm_tool_registry_destroy(reg);
 }
 
+static void test_agent_context_full(void)
+{
+    /* Chat 模式多轮工具：transcript 达到上限 → CONTEXT_FULL（§10.2，不静默删除） */
+    otool_llm_tool_registry_handle_t reg = NULL;
+    CHECK(otool_llm_tool_registry_create(&reg) == ESP_OK, "cf reg create");
+    otool_llm_tool_definition_t tool = {};
+    tool.struct_size = sizeof(tool);
+    tool.name = "get_device_status";
+    tool.description = "status";
+    tool.parameters_json_schema =
+        "{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}";
+    tool.flags = OTOOL_LLM_TOOL_READ_ONLY;
+    tool.execute = tool_get_device_status;
+    CHECK(otool_llm_tool_registry_add(reg, &tool) == ESP_OK, "cf add tool");
+    otool_llm_tool_registry_seal(reg);
+
+    otool_llm_agent_config_t cfg = {};
+    cfg.struct_size = sizeof(cfg);
+    cfg.client = (otool_llm_client_handle_t)0x2;
+    cfg.tools = reg;
+    cfg.model = "fake-model";
+    cfg.state_mode = OTOOL_LLM_AGENT_STATE_LOCAL_TRANSCRIPT;
+    cfg.max_turns = 8; /* 每轮 3 条（user/assistant/tool），第 4 轮触顶 */
+    cfg.max_tool_calls = 8;
+
+    otool_llm_agent_handle_t agent = NULL;
+    CHECK(otool_llm_agent_create(&cfg, &agent) == ESP_OK, "cf agent create");
+
+    agent_collector_t col = { 0 };
+    g_fake_turn = 0;
+    g_fake_chat = 1;
+    g_fake_loop = 1;
+    esp_err_t err = otool_llm_agent_run_stream(agent, "状态？", agent_collect_cb, &col);
+    g_fake_chat = 0;
+    g_fake_loop = 0;
+    CHECK(err == OTOOL_LLM_ERR_CONTEXT_FULL,
+          "context full run returns CONTEXT_FULL (got 0x%x)", (unsigned)err);
+
+    bool saw_error = false;
+    for (int i = 0; i < col.count; i++) {
+        if (col.events[i].type == OTOOL_LLM_AGENT_EVENT_ERROR) {
+            saw_error = true;
+            CHECK(col.events[i].data.error.code == OTOOL_LLM_ERR_CONTEXT_FULL,
+                  "ERROR event code CONTEXT_FULL (got 0x%x)",
+                  (unsigned)col.events[i].data.error.code);
+        }
+        CHECK(col.events[i].type != OTOOL_LLM_AGENT_EVENT_RUN_COMPLETED,
+              "no RUN_COMPLETED after CONTEXT_FULL");
+    }
+    CHECK(saw_error, "CONTEXT_FULL error event emitted");
+
+    otool_llm_agent_destroy(agent);
+    otool_llm_tool_registry_destroy(reg);
+}
+
 static void test_agent_chat_local_transcript(void)
 {
     /* LOCAL_TRANSCRIPT + Chat 事件脚本：工具结果通过 transcript 消息回传 */
@@ -897,6 +963,7 @@ int main(void)
     test_agent_callback_cancel();
     test_agent_tool_failures();
     test_agent_multi_tools();
+    test_agent_context_full();
     test_agent_chat_local_transcript();
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

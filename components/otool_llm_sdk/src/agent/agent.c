@@ -105,6 +105,7 @@ struct otool_llm_agent {
     bool chat_mode;
     agent_transcript_entry_t transcript[AGENT_TRANSCRIPT_MAX];
     size_t transcript_count;
+    bool transcript_full; /* 达到上限（§10.2：报 CONTEXT_FULL，不静默删除） */
     /* 循环检测：同一 name+arguments 连续 2 次 → RUN_LIMIT_REACHED（WP4 计划） */
     char last_tool_name[64];
     char last_tool_args[256];
@@ -322,6 +323,7 @@ esp_err_t otool_llm_agent_run_stream(otool_llm_agent_handle_t agent,
     agent->turn_index = 0;
     agent->last_output_count = 0;
     agent->transcript_count = 0; /* 每次 run 独立 transcript */
+    agent->transcript_full = false;
     agent->have_last_tool = false; /* 循环检测随 run 重置 */
 
     otool_llm_agent_event_t evt = { .type = OTOOL_LLM_AGENT_EVENT_RUN_STARTED };
@@ -338,6 +340,15 @@ esp_err_t otool_llm_agent_run_stream(otool_llm_agent_handle_t agent,
             evt.type = OTOOL_LLM_AGENT_EVENT_CANCELLED;
             agent_emit(agent, &evt);
             result = ESP_OK;
+            break;
+        }
+        if (agent->transcript_full) {
+            /* §10.2：本地 transcript 达到上限 → CONTEXT_FULL，不静默删除中间消息 */
+            evt.type = OTOOL_LLM_AGENT_EVENT_ERROR;
+            evt.data.error.code = OTOOL_LLM_ERR_CONTEXT_FULL;
+            evt.data.error.message = otool_llm_err_to_name(OTOOL_LLM_ERR_CONTEXT_FULL);
+            agent_emit(agent, &evt);
+            result = OTOOL_LLM_ERR_CONTEXT_FULL;
             break;
         }
         if (agent->turn_index >= agent->max_turns) {
@@ -381,11 +392,15 @@ esp_err_t otool_llm_agent_run_stream(otool_llm_agent_handle_t agent,
         req.max_output_tokens = 2048;
         if (agent->chat_mode) {
             /* 第一轮：user 输入先记入 transcript */
-            if (first_turn && agent->transcript_count < AGENT_TRANSCRIPT_MAX) {
-                agent_transcript_entry_t *ue = &agent->transcript[agent->transcript_count++];
-                memset(ue, 0, sizeof(*ue));
-                ue->role = OTOOL_LLM_ROLE_USER;
-                snprintf(ue->text, sizeof(ue->text), "%s", user_text);
+            if (first_turn) {
+                if (agent->transcript_count < AGENT_TRANSCRIPT_MAX) {
+                    agent_transcript_entry_t *ue = &agent->transcript[agent->transcript_count++];
+                    memset(ue, 0, sizeof(*ue));
+                    ue->role = OTOOL_LLM_ROLE_USER;
+                    snprintf(ue->text, sizeof(ue->text), "%s", user_text);
+                } else {
+                    agent->transcript_full = true;
+                }
             }
             /* 本地 transcript：历史消息 + 当前轮输入 */
             size_t n = 0;
@@ -472,12 +487,15 @@ esp_err_t otool_llm_agent_run_stream(otool_llm_agent_handle_t agent,
 
         if (ready_count == 0) {
             /* 最终回答轮：Chat 模式把模型文本记入 transcript */
-            if (agent->chat_mode && bridge.text_len > 0 &&
-                agent->transcript_count < AGENT_TRANSCRIPT_MAX) {
-                agent_transcript_entry_t *e = &agent->transcript[agent->transcript_count++];
-                memset(e, 0, sizeof(*e));
-                e->role = OTOOL_LLM_ROLE_ASSISTANT;
-                snprintf(e->text, sizeof(e->text), "%.255s", bridge.text);
+            if (agent->chat_mode && bridge.text_len > 0) {
+                if (agent->transcript_count < AGENT_TRANSCRIPT_MAX) {
+                    agent_transcript_entry_t *e = &agent->transcript[agent->transcript_count++];
+                    memset(e, 0, sizeof(*e));
+                    e->role = OTOOL_LLM_ROLE_ASSISTANT;
+                    snprintf(e->text, sizeof(e->text), "%.255s", bridge.text);
+                } else {
+                    agent->transcript_full = true;
+                }
             }
             evt.type = OTOOL_LLM_AGENT_EVENT_RUN_COMPLETED;
             agent_emit(agent, &evt);
@@ -510,6 +528,8 @@ esp_err_t otool_llm_agent_run_stream(otool_llm_agent_handle_t agent,
                     tci++;
                 }
                 e->tool_call_count = tci;
+            } else {
+                agent->transcript_full = true;
             }
         }
 
@@ -611,13 +631,17 @@ esp_err_t otool_llm_agent_run_stream(otool_llm_agent_handle_t agent,
                 out_item->output = agent->tool_output_bufs[out_count];
                 out_count++;
                 /* Chat 模式：追加 tool 结果消息到 transcript */
-                if (agent->chat_mode && agent->transcript_count < AGENT_TRANSCRIPT_MAX) {
-                    agent_transcript_entry_t *te = &agent->transcript[agent->transcript_count++];
-                    memset(te, 0, sizeof(*te));
-                    te->role = OTOOL_LLM_ROLE_TOOL;
-                    snprintf(te->tool_call_id, sizeof(te->tool_call_id), "%s",
-                             c->call_id[0] ? c->call_id : "call_unknown");
-                    snprintf(te->text, sizeof(te->text), "%s", output);
+                if (agent->chat_mode) {
+                    if (agent->transcript_count < AGENT_TRANSCRIPT_MAX) {
+                        agent_transcript_entry_t *te = &agent->transcript[agent->transcript_count++];
+                        memset(te, 0, sizeof(*te));
+                        te->role = OTOOL_LLM_ROLE_TOOL;
+                        snprintf(te->tool_call_id, sizeof(te->tool_call_id), "%s",
+                                 c->call_id[0] ? c->call_id : "call_unknown");
+                        snprintf(te->text, sizeof(te->text), "%s", output);
+                    } else {
+                        agent->transcript_full = true; /* 下一轮顶部报 CONTEXT_FULL */
+                    }
                 }
             }
             if (agent->cancel_requested) {
