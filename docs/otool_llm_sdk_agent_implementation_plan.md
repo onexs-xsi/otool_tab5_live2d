@@ -1060,7 +1060,7 @@ Gate 达成：host 测试一条命令有文档、有稳定结果（IDF test app 
 - **取消**：已连接阶段 CANCELLED 延迟 3–5ms；连接阶段 ≤connect_timeout（实测 6.9–8.9s）；排队取消语义正确；**CANCELLED 后无 TEXT_DELTA/RUN_COMPLETED 回调**（gate ✓）；
 - **Wi-Fi 断开/恢复**：`wifi-reconnect` 期间 in-flight run 出现瞬态 `ERROR code=0x7002`（连接被断开，符合预期）或存活；链路恢复后 run 正常（gate ✓）；
 - **401 注入**：错误 key → `[agent] ERROR code=0x106`（检测到并终止）→ 恢复 key + 复位 → run 正常（gate ✓）；
-- **429/5xx/错误 Content-Type/EOF/超限/JSON 错误**：`transport_test`（IDF test app，本地 server）覆盖 401/429/500/badtype/half/oversize/errorjson/eof-no-terminal/multi-choice 全绿；
+- **429/5xx/错误 Content-Type/EOF/超限/JSON 错误**：`transport_test`（IDF test app，本地 server）用例覆盖 401/429/500/badtype/half/oversize/errorjson/eof-no-terminal/multi-choice；**实跑待 Linux 环境**（WSL localhost 转发异常）；401 的实测语义已修正（esp_http_client 认证路径返回 ESP_ERR_NOT_SUPPORTED 且不触发 ON_DATA → transport 按状态码归类为 HTTP_STATUS，真机 401 注入验证通过：`ERROR code=0x1d007`）；
 - **请求体大小**：570–628B（1 tool + 2 messages，schema 成本约 60B）；
 - **固件**：0x2EE340 = 3,072,832B ≈ 2.93MB（含 Noto 24px 字体 1.47MB）；
 - **SDIO 崩溃**：测试期约 3–6 次/小时（`sdmmc_send_cmd 0x107` → `Unrecoverable host sdio state` → SW_CPU_RESET）。定位为供电/SDIO 4-bit 40MHz 满配的环境问题（用户要求保留原配置）。修复 2 保证崩溃后系统自愈；**建议稳定供电后复测**。
