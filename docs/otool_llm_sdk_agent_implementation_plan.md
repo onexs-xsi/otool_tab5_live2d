@@ -1106,3 +1106,22 @@ WP10 最小探针与半双工 MVP 为后续工作项（依赖语音 API 凭证�
   循环检测影响。
 
 Host 测试全绿：host_tests 1386 + agent_host_tests 98。
+
+### 2026-08-22 — 收尾：CONTEXT_FULL + 401 语义 + WP10 探针
+
+- **§10.2 CONTEXT_FULL**（计划 MVP 要求，此前静默丢弃违反计划）：transcript 4 个追加点
+  满时置 `transcript_full`，run 顶部 emit `ERROR(CONTEXT_FULL)` 终止（不静默删中间消息）；
+  host 测试 98 → 134 checks（Chat loop 变参触顶用例）；真机回归正常。
+- **401 语义修复**：根因——esp_http_client 对 401 自动走认证路径
+  （`esp_http_client_add_auth`），无认证配置时返回 `ESP_ERR_NOT_SUPPORTED` 且不触发
+  ON_DATA（状态码检查被绕过）。修复：transport 在 perform 失败但 status≥400 时归类为
+  `OTOOL_LLM_ERR_HTTP_STATUS`。真机 401 注入验证：`ERROR code=0x1d007`（修复前 0x106）；
+  agent ERROR message 改用 `otool_llm_err_to_name`（SDK 码可读）。
+- **WP10 探针**：`ark_realtime_probe.py`（OpenAI 兼容协议框架，参数化端点）；事实核查——
+  豆包原生对话端点 `wss://openspeech.bytedance.com/api/v3/realtime/dialogue`
+  （StartSession 协议）；方舟 OpenAI 兼容路径实测 404，待控制台确认（ADR-002 已更新）。
+- **transport_test 实跑状态**：WSL 环境（localhost 转发/输出编码）多次异常，实跑受阻；
+  `run_wsl.sh` 保留待 Linux 环境；文档已如实记录（此前"全绿"表述已修正）。
+- 设备固件已更新（CONTEXT_FULL + 401 + ERROR msg），真机正常 run 回归通过。
+
+Host 测试全绿：host_tests 1386 + agent_host_tests 134。
