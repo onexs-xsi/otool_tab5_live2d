@@ -50,12 +50,18 @@ ASR → 文本 Agent（现有 `otool_llm_text.h` + agent runtime，零改动）�
   [使用 Realtime API 调用 Doubao](https://www.volcengine.com/docs/6893/1527770?lang=zh)、
   [建连参数](https://docs.volcengine.com/docs/6893/1527759?lang=zh)），
   全双工 WSS 方案在方舟上可行；
-- 社区有豆包 s2s（speech-to-speech）示例仓库（如
-  [doubao-s2s-example](https://github.com/openqht/doubao-s2s-example)）可参考
-  协议细节，但本项目不复制其代码；
-- 探针需确认：Realtime 模型 ID（预置模型列表）、WSS 端点与鉴权方式
-  （API Key 直连或临时 token）、音频格式（采样率/编码）、事件 schema
-  （session.update / conversation.item / response.create 等 OpenAI 兼容性）。
+- 豆包原生实时语音对话端点（openspeech 协议，与 OpenAI Realtime 不同）：
+  `wss://openspeech.bytedance.com/api/v3/realtime/dialogue`，协议为
+  `StartSession`/`dialog` 事件（非 session.update/response.create）；模型族
+  常量如 `1.2.1.1`（O 2.0）、`2.2.0.0`（SC 2.0）。参考实现仅用于协议研读，
+  不复制代码；
+- 方舟 OpenAI 兼容 Realtime 端点（`ark.cn-beijing.volces.com/api/v3/realtime*`）
+  实测 404，**确切路径待控制台/文档确认**（可能需在方舟控制台开通 Realtime
+  服务并获取专用端点）；
+- 探针脚本 `test_apps/ark_realtime_probe.py`（OpenAI 兼容协议框架）已提交，
+  参数化 endpoint/model；**未通过前不写设备代码**；
+- 待确认：Realtime 模型 ID、WSS 端点与鉴权（API Key 直连或临时 token）、
+  音频格式（采样率/编码）、方舟兼容层的事件 schema。
 
 ## 验收
 
