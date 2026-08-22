@@ -1,9 +1,9 @@
-// otool_tab5_live2d UI module: LVGL screen for LLM status and reply.
-// 不含 LLM/网络逻辑；通过 llm_app_get_status()/llm_app_reply_read()/
-// llm_app_hint_read() 读取数据，触摸点击通过 llm_app_ask_now() 触发。
+// otool_tab5_live2d UI module: LVGL screen for agent status and reply.
+// 不含 LLM/网络逻辑；通过 agent_app_status()/agent_app_reply_read() 读取数据，
+// 触摸点击取消当前 run 并触发一次 agent 问询（agent_app_cancel + agent_app_ask）。
 
 #include "ui_app.h"
-#include "llm_app.h"
+#include "agent_app.h"
 
 #include "otool_lvgl_port.h"
 #include "lvgl.h"
@@ -17,6 +17,10 @@
 #include <cstdio>
 
 static const char *TAG = "ui_app";
+
+/* 默认问询：直接走 agent API（不经 console/linenoise），中文安全 */
+#define UI_DEFAULT_QUESTION \
+    "请调用 get_device_status 工具查看设备状态，然后用一句话中文总结。"
 
 /* CMake EMBED_FILES 嵌入的二进制字体（main/fonts/noto_cn_fonts/）。
  * 注意：IDF 的 embed 符号名只取文件名（目录被剥离）。
@@ -33,7 +37,6 @@ static lv_obj_t *s_hint_label = nullptr;
 
 static char s_status_text[192] = "starting...";
 static char s_reply_text[4096 + 8] = "";
-static char s_hint_text[128] = "";
 
 static void fonts_load(void)
 {
@@ -45,12 +48,13 @@ static void fonts_load(void)
     }
 }
 
-/* 点击屏幕：触发提问 / 打断当前请求 */
+/* 点击屏幕：打断当前 agent run 并触发一次默认问询 */
 static void screen_click_cb(lv_event_t *e)
 {
     (void)e;
     ESP_LOGI(TAG, "tap detected");
-    llm_app_ask_now();
+    agent_app_cancel(); /* 立即中断进行中的 run（若在跑） */
+    agent_app_ask(UI_DEFAULT_QUESTION);
 }
 
 static void ui_timer_cb(lv_timer_t *timer)
@@ -60,26 +64,18 @@ static void ui_timer_cb(lv_timer_t *timer)
         return;
     }
 
-    llm_app_status_t st;
-    llm_app_get_status(&st);
-    llm_app_reply_read(s_reply_text, sizeof(s_reply_text));
-    llm_app_hint_read(s_hint_text, sizeof(s_hint_text));
+    char status[192] = { 0 };
+    agent_app_status(status, sizeof(status));
+    agent_app_reply_read(s_reply_text, sizeof(s_reply_text));
 
-    if (st.error[0] != '\0') {
-        snprintf(s_status_text, sizeof(s_status_text), "round %d | error: %.120s", st.round,
-                 st.error);
-    } else if (st.busy) {
-        snprintf(s_status_text, sizeof(s_status_text), "round %d | LLM streaming...", st.round);
-    } else {
-        snprintf(s_status_text, sizeof(s_status_text), "round %d | LLM idle | tap to ask",
-                 st.round);
+    if (s_reply_text[0] == '\0') {
+        snprintf(s_reply_text, sizeof(s_reply_text), "（暂无回复，点击屏幕提问）");
     }
 
+    const char *proto = agent_proto_name();
+    snprintf(s_status_text, sizeof(s_status_text), "agent [%s] | %s", proto, status);
     lv_label_set_text(s_status_label, s_status_text);
     lv_label_set_text(s_reply_label, s_reply_text);
-    if (s_hint_text[0] != '\0') {
-        lv_label_set_text(s_hint_label, s_hint_text);
-    }
 }
 
 extern "C" void ui_app_start(void)
