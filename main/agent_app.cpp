@@ -384,7 +384,7 @@ extern "C" void agent_app_start(void)
     s_reply_lock = xSemaphoreCreateMutex();
 
     BaseType_t created = xTaskCreatePinnedToCore(agent_worker_task, "agent_worker",
-                                                 32768, nullptr, 5,
+                                                 CONFIG_OTOOL_LLM_AGENT_TASK_STACK_SIZE, nullptr, 5,
                                                  nullptr, 1);
     if (created != pdPASS) {
         ESP_LOGE(TAG, "agent worker create failed");

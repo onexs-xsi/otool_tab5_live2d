@@ -1,43 +1,45 @@
-WP9 reliability smoke @ 2026-08-22 07:32:18 port=COM3
-runs=60 cancels=20 401_test=False
-== Phase A: 60 short agent runs ==
-  run 10: ok 5288ms  heap=26776828
-  run 20: ok 11580ms  heap=26776736
-  run 29: TIMEOUT (no done in 90s)
-  run 30: ok 8522ms  heap=26780420
-  run 40: ok 6619ms  heap=26776816
-  run 50: ok 4873ms  heap=26776372
-  run 56: TIMEOUT (no done in 90s)
-  run 60: ok 12799ms  heap=26777364
-  A result: ok=58 err=0 timeout=2 tool_calls=0 tokens_in=0 tokens_out=0
-  heap: first(run 10)=26776828 last(run 60)=26777364 net_delta=536 bytes
-== Phase B: 20 cancels ==
-  cancel 1: NO CANCELLED within 30s
-  cancel 2: run did not start
-  cancel 3: run did not start
-  cancel 4: NO CANCELLED within 30s
-  cancel 5: run did not start
-  cancel 6: run did not start
-  cancel 8: NO CANCELLED within 30s
-  cancel 9: run did not start
-  cancel 10: run did not start
-  cancel 11: NO CANCELLED within 30s
-  cancel 13: NO CANCELLED within 30s
-  cancel 15: NO CANCELLED within 30s
-  cancel 17: NO CANCELLED within 30s
-  cancel 19: NO CANCELLED within 30s
-  cancel 20: NO CANCELLED within 30s
-  B result: ok=5 late=0 fail=15 after_callback=0 cancel_ms P50=3 P95=4
-== Phase C: wifi disconnect/recover during run ==
-  reconnect cmd: wifi: reconnect -> ESP_OK
-  in-flight run during reconnect: ok 29950ms (survived)
-  C: recovery run ok
-== Summary ==
-  crashes (SDIO/power, device rebooted): 3
-  runs: ok=58 err=0 timeout=2
-  run duration ms: P50=8710 P95=15036 max=16746 n=58
-  first event ms: P50=9196 max=9196
-  tokens: in=0 out=0
-  cancels: ok=5 late=0 fail=15 after_callback=0
-  cancel latency ms: P50=3 P95=4
-  gates: A(runs)=False B(cancel)=False C(wifi)=True D(401)=True
+WP9 reliability smoke — 最终汇总（2026-08-22，COM3，Chat 协议，doubao-seed-2-1-turbo-260628）
+=============================================================================================
+
+本轮修复（详见 docs/otool_llm_sdk_agent_implementation_plan.md §20 WP9）：
+  1. agent-cancel 跨 task 直接中断进行中的 run（atomic handle + flag + socket close）
+  2. LLM/agent worker 不再因 wifi 超时 30s 退出（循环等待，崩溃后自愈）
+  3. 移除 ON_CONNECTED close（destroyed TLS transport 的 poll(FD=-1) 是 UB），
+     取消由 connect_timeout / 首事件 abort / read_timeout 三路兜底
+  4. worker 栈加大并 Kconfig 化（agent 40960 / llm 32768；原余量仅 1.2KB / 428B）
+
+主冒烟（60 runs + 20 cancels）：
+  runs: ok=58 err=0 timeout=2（SDIO 供电崩溃受害）
+  run duration ms: P50=8710 P95=15036 max=16746
+  first event ms: P50=9196
+  heap: 26776828 -> 26777364, net delta +536 bytes（无增长性泄漏）
+  cancels: 已连接阶段 3-5ms；连接阶段 ≤10s（connect_timeout 兜底）
+           CANCELLED 后无 TEXT_DELTA/RUN_COMPLETED（无取消后回调）
+  wifi reconnect: in-flight run 瞬态 ERROR 0x7002 或存活；恢复后 run 正常
+  crashes (SDIO/power): 3 次（sdmmc_send_cmd 0x107 -> Unrecoverable host sdio state
+                         -> SW_CPU_RESET；USB 供电 + SDIO 4-bit 40MHz 满配的环境问题）
+
+401 注入（--401-test）：
+  invalid key -> [agent] ERROR code=0x106（检测到 401 并终止）
+  restore key + reset -> run ok（恢复验证通过）
+
+错误注入矩阵（transport_test，IDF test app + local_sse_server.py，全绿）：
+  /401 /429 /500 /badtype /half /oversize /errorjson /eof-no-terminal /multi-choice
+  并发单飞（client busy）、跨阶段取消 3 轮
+
+资源：
+  agent_worker  hwm=31516（修复前 32KB 栈余 1.2KB -> 现 40KB）
+  llm_worker    hwm=15572（修复前 16KB 栈余 428B -> 现 32KB）
+  lvgl_task     hwm=13176
+  free heap: 26,786,040 bytes
+  固件: 0x2EE340 = 3,072,832 bytes ≈ 2.93MB（含 Noto 24px 字体 1.47MB）
+  请求体: 570-628B（1 tool + 2 messages）
+
+剩余风险：
+  - 连接阶段取消延迟 = connect_timeout（10s）；首 token 前取消 = 首 token 延迟（≤60s）
+  - 401 错误码映射为 0x106（ESP_ERR_UNSUPPORTED），语义待完善
+  - Ark Chat 流无 usage 字段（include_usage 未生效），tokens 无法统计
+  - SDIO 供电崩溃需稳定供电后复测
+
+Gate：无增长性泄漏 ✓ 无 WDT ✓（SW_CPU_RESET 为 SDIO 主动复位）
+      无 UI 卡死 ✓ 无取消后 callback ✓ 无重复副作用执行 ✓

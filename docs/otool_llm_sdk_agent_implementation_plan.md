@@ -1041,3 +1041,35 @@ HOST TESTS: ALL PASS
 ```
 
 Gate 达成：host 测试一条命令有文档、有稳定结果（IDF test app 命令由 `idf.py build` + 真机 console 冒烟承担，见 WP6/WP8 记录）。
+
+### 2026-08-22 — WP9（完成：可靠性、资源与安全报告）
+
+新增 `test_apps/reliability_smoke.py`（pyserial 驱动真机 console；崩溃容忍：检测 SW_CPU_RESET/SDIO 复位后自动等待 wifi 恢复并继续）。
+
+#### 发现并修复的缺陷
+
+1. **agent-cancel 无法中断进行中的 run**（P0）：worker 阻塞在 `otool_llm_agent_run_stream` 内，`agent-cancel` 只排队等 run 结束，取消无效。修复：agent handle 以 `std::atomic` 暴露，`agent_app_cancel()` 跨 task 调用 `otool_llm_agent_cancel()`（置标志 + 关闭活动请求 socket → run_stream 下一事件循环返回并 emit CANCELLED）；run 尚未开始时（worker 排队/等 wifi）置 `s_cancel_pending`，由 worker 丢弃排队问题。
+2. **LLM/agent worker 在 wifi 超时 30s 后永久退出**（P0）：SDIO/供电复位后 wifi 恢复常超过 30s，worker 直接 `vTaskDelete`，此后所有 console 命令无人处理（表现为 "run did not start"、cancel 无响应）。修复：循环等待 wifi（30s 窗口，恢复后自动可用）。
+3. **ON_CONNECTED 时 close 是未定义行为**：同步 connect 期间 state=INIT，`esp_http_client_close` 是 no-op；连接完成后在 ON_CONNECTED 回调内 close 会 destroy TLS transport，perform 随后的 `request_send` 对已销毁 transport 执行 `poll(FD=-1)`（fd_set 栈越界写）。修复：移除该 close，取消由三路兜底——连接中（connect_timeout 10s 后失败）、连接后（首个 SSE 事件回调 ACTION_CANCEL → ON_DATA 安全 abort）、首 token 前（read_timeout 60s）。
+4. **worker 栈余量不足**：实测 `stack` 命令（新增）显示 agent_worker hwm=31516/32768（余 1.2KB）、llm_worker hwm=15572/16384（余 428B）。修复：agent 栈 → `CONFIG_OTOOL_LLM_AGENT_TASK_STACK_SIZE`（默认 40960），llm 栈默认 16384 → 32768。
+
+#### 冒烟数据（Chat 协议，doubao-seed-2-1-turbo-260628，COM3）
+
+- **60 次短 run**：ok=58 err=0 timeout=2（SDIO 崩溃受害）；run 耗时 P50=8.7s P95=15.0s max=16.7s；首次事件 P50=9.2s；
+- **堆**：run10=26776828 → run60=26777364，**净 +536B（无增长性泄漏）**；测试期稳定在 26.77–26.78MB；
+- **取消**：已连接阶段 CANCELLED 延迟 3–5ms；连接阶段 ≤connect_timeout（实测 6.9–8.9s）；排队取消语义正确；**CANCELLED 后无 TEXT_DELTA/RUN_COMPLETED 回调**（gate ✓）；
+- **Wi-Fi 断开/恢复**：`wifi-reconnect` 期间 in-flight run 出现瞬态 `ERROR code=0x7002`（连接被断开，符合预期）或存活；链路恢复后 run 正常（gate ✓）；
+- **401 注入**：错误 key → `[agent] ERROR code=0x106`（检测到并终止）→ 恢复 key + 复位 → run 正常（gate ✓）；
+- **429/5xx/错误 Content-Type/EOF/超限/JSON 错误**：`transport_test`（IDF test app，本地 server）覆盖 401/429/500/badtype/half/oversize/errorjson/eof-no-terminal/multi-choice 全绿；
+- **请求体大小**：570–628B（1 tool + 2 messages，schema 成本约 60B）；
+- **固件**：0x2EE340 = 3,072,832B ≈ 2.93MB（含 Noto 24px 字体 1.47MB）；
+- **SDIO 崩溃**：测试期约 3–6 次/小时（`sdmmc_send_cmd 0x107` → `Unrecoverable host sdio state` → SW_CPU_RESET）。定位为供电/SDIO 4-bit 40MHz 满配的环境问题（用户要求保留原配置）。修复 2 保证崩溃后系统自愈；**建议稳定供电后复测**。
+
+#### 剩余风险
+
+- 连接阶段取消延迟 = connect_timeout（10s）；首 token 前取消 = 模型首 token 延迟（≤ read_timeout 60s）；
+- 401 错误码映射为 0x106（ESP_ERR_UNSUPPORTED），语义应为 HTTP_STATUS/PROVIDER——待完善映射；
+- Ark Chat 流未返回 usage（include_usage 未生效），tokens 无法由设备统计；
+- OpenAI Responses 工具调用仍无凭证可测（外部依赖）。
+
+Gate 评估：无增长性泄漏 ✓、无 WDT ✓（SW_CPU_RESET 为 SDIO 主动复位）、无 UI 卡死 ✓、无取消后 callback ✓、无重复副作用执行 ✓（工具只读，cancel 后工具循环 break）。

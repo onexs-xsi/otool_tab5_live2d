@@ -36,7 +36,12 @@ config OTOOL_LLM_MODEL
 
 config OTOOL_LLM_LLM_TASK_STACK_SIZE
     int "LLM worker task stack size (bytes)"
-    default 16384
+    default 32768
+    range 8192 65536
+
+config OTOOL_LLM_AGENT_TASK_STACK_SIZE
+    int "Agent worker task stack size (bytes)"
+    default 40960
     range 8192 65536
 
 config OTOOL_LLM_UI_REFRESH_MS
